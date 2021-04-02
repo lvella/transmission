@@ -22,6 +22,7 @@
 #include "peer-mgr.h" /* pex */
 #include "torrent.h"
 #include "trevent.h" /* tr_runInEventThread() */
+#include "tr-assert.h"
 #include "utils.h"
 #include "variant.h"
 #include "web.h" /* tr_http_escape() */
@@ -41,10 +42,10 @@ static char const* get_event_string(tr_announce_request const* req)
         tr_announce_event_get_string(req->event);
 }
 
-static char* announce_url_new(tr_session const* session, tr_announce_request const* req)
+static char* announce_url_new(tr_session const* session, tr_announce_request const* req, unsigned char const* ipv6,
+    size_t* no_ipv6_cutoff)
 {
     char const* str;
-    unsigned char const* ipv6;
     struct evbuffer* buf = evbuffer_new();
     char escaped_info_hash[SHA_DIGEST_LENGTH * 3 + 1];
 
@@ -100,16 +101,7 @@ static char* announce_url_new(tr_session const* session, tr_announce_request con
         evbuffer_add_printf(buf, "&trackerid=%s", str);
     }
 
-    /* There are two incompatible techniques for announcing an IPv6 address.
-       BEP-7 suggests adding an "ipv6=" parameter to the announce URL,
-       while OpenTracker requires that peers announce twice, once over IPv4
-       and once over IPv6.
-
-       To be safe, we should do both: add the "ipv6=" parameter and
-       announce twice. At any rate, we're already computing our IPv6
-       address (for the LTEP handshake), so this comes for free. */
-
-    ipv6 = tr_globalIPv6();
+    *no_ipv6_cutoff = evbuffer_get_length(buf);
 
     if (ipv6 != NULL)
     {
@@ -174,38 +166,66 @@ static tr_pex* listToPex(tr_variant* peerList, size_t* setme_len)
     return pex;
 }
 
-struct announce_data
+struct response_data
 {
     tr_announce_response response;
     tr_announce_response_func response_func;
     void* response_func_user_data;
-    char log_name[128];
 };
+
+struct announce_data
+{
+    uint8_t info_hash[SHA_DIGEST_LENGTH];
+    tr_announce_response_func response_func;
+    void* response_func_user_data;
+    struct response_data* previous_response;
+    char log_name[128];
+    uint8_t requests_sent_count;
+    uint8_t requests_answered_count;
+    bool http_success;
+};
+
+static struct response_data* create_response_data(struct announce_data* adata)
+{
+    struct response_data* rd = tr_new0(struct response_data, 1);
+    rd->response.seeders = -1;
+    rd->response.leechers = -1;
+    rd->response.downloads = -1;
+    memcpy(rd->response.info_hash, adata->info_hash, SHA_DIGEST_LENGTH);
+    rd->response_func = adata->response_func;
+    rd->response_func_user_data = adata->response_func_user_data;
+
+    return rd;
+}
+
+static void free_response_data(struct response_data* rd)
+{
+    tr_free(rd->response.pex6);
+    tr_free(rd->response.pex);
+    tr_free(rd->response.tracker_id_str);
+    tr_free(rd->response.warning);
+    tr_free(rd->response.errmsg);
+    tr_free(rd);
+}
 
 static void on_announce_done_eventthread(void* vdata)
 {
-    struct announce_data* data = vdata;
+    struct response_data* data = vdata;
 
     if (data->response_func != NULL)
     {
         data->response_func(&data->response, data->response_func_user_data);
     }
 
-    tr_free(data->response.pex6);
-    tr_free(data->response.pex);
-    tr_free(data->response.tracker_id_str);
-    tr_free(data->response.warning);
-    tr_free(data->response.errmsg);
-    tr_free(data);
+    free_response_data(data);
 }
 
-static void on_announce_done(tr_session* session, bool did_connect, bool did_timeout, long response_code, void const* msg,
-    size_t msglen, void* vdata)
+static bool handle_announce_response(bool did_connect, bool did_timeout, long response_code, void const* msg, size_t msglen,
+    void* vdata, tr_announce_response* response)
 {
-    tr_announce_response* response;
     struct announce_data* data = vdata;
+    bool success = false;
 
-    response = &data->response;
     response->did_connect = did_connect;
     response->did_timeout = did_timeout;
     dbgmsg(data->log_name, "Got announce response");
@@ -307,6 +327,8 @@ static void on_announce_done(tr_session* session, bool did_connect, bool did_tim
                 response->pex = listToPex(tmp, &response->pex_count);
                 dbgmsg(data->log_name, "got a peers list with %zu entries", response->pex_count);
             }
+
+            success = true;
         }
 
         if (variant_loaded)
@@ -315,26 +337,124 @@ static void on_announce_done(tr_session* session, bool did_connect, bool did_tim
         }
     }
 
-    tr_runInEventThread(session, on_announce_done_eventthread, data);
+    return success;
+}
+
+static void on_announce_done(tr_session* session, bool did_connect, bool did_timeout, long response_code, void const* msg,
+    size_t msglen, void* vdata)
+{
+    struct announce_data* data = vdata;
+
+    ++data->requests_answered_count;
+
+    // If another request already succeeded, skip processing this new request:
+    if (!data->http_success)
+    {
+        struct response_data* rd = create_response_data(data);
+
+        data->http_success = handle_announce_response(
+            did_connect, did_timeout, response_code, msg, msglen, vdata, &rd->response);
+
+        if (data->http_success)
+        {
+            tr_runInEventThread(session, on_announce_done_eventthread, rd);
+        }
+        else if (data->requests_answered_count == data->requests_sent_count)
+        {
+            // All requests have been answered, but none were successfull.
+            // Choose the one that went further to report.
+            if (data->previous_response && !rd->response.did_connect && !rd->response.did_timeout)
+            {
+                free_response_data(rd);
+                rd = data->previous_response;
+                data->previous_response = NULL;
+            }
+
+            tr_runInEventThread(session, on_announce_done_eventthread, rd);
+        }
+        else
+        {
+            // There is still one request pending that might succeed, so store
+            // the response for later. There is only room for 1 previous response,
+            // because there can be at most 2 requests.
+            TR_ASSERT(!data->previous_response);
+            data->previous_response = rd;
+        }
+    }
+    else
+    {
+        dbgmsg(data->log_name, "Ignoring redundant announce response");
+    }
+
+    // Free data if no more responses are expected:
+    if (data->requests_answered_count == data->requests_sent_count)
+    {
+        if (data->previous_response)
+        {
+            free_response_data(data->previous_response);
+        }
+
+        tr_free(data);
+    }
 }
 
 void tr_tracker_http_announce(tr_session* session, tr_announce_request const* request, tr_announce_response_func response_func,
     void* response_func_user_data)
 {
     struct announce_data* d;
-    char* url = announce_url_new(session, request);
+    unsigned char const* ipv6;
+    size_t no_ipv6_cutoff;
+    char* url;
 
     d = tr_new0(struct announce_data, 1);
-    d->response.seeders = -1;
-    d->response.leechers = -1;
-    d->response.downloads = -1;
     d->response_func = response_func;
     d->response_func_user_data = response_func_user_data;
-    memcpy(d->response.info_hash, request->info_hash, SHA_DIGEST_LENGTH);
+    d->http_success = false;
+    memcpy(d->info_hash, request->info_hash, SHA_DIGEST_LENGTH);
     tr_strlcpy(d->log_name, request->log_name, sizeof(d->log_name));
 
-    dbgmsg(request->log_name, "Sending announce to libcurl: \"%s\"", url);
-    tr_webRun(session, url, on_announce_done, d);
+    /* There are two alternative techniques for announcing both IPv4 and
+       IPv6 addresses. Previous version of BEP-7 suggests adding "ipv4="
+       and "ipv6=" parameters to the announce URL, while OpenTracker and
+       newer version of BEP-7 requires that peers announce once per each
+       public address they want to use.
+
+       We should ensure that we send the announce both via IPv6 and IPv4,
+       and to be safe we also add the "ipv6=" parameter, because we're
+       already computing our global IPv6 address (for the LTEP handshake),
+       so this comes for free.
+
+       We don't set the "ipv4=" parameter because it is much harder to
+       figure the public IPv4 address of the machine due to pervasive use
+       of NAT, so it is probably not worth it.
+
+       TODO: Use miniUPnPc to figure out the public IPv4 address and set
+       "ipv4=" parameter.
+     */
+    ipv6 = tr_globalIPv6();
+    url = announce_url_new(session, request, ipv6, &no_ipv6_cutoff);
+
+    if (ipv6)
+    {
+        d->requests_sent_count = 2;
+
+        // First try to send the announce via IPv4:
+        dbgmsg(request->log_name, "Sending IPv4 announce to libcurl: \"%s\"", url);
+        tr_webRunWithIpProto(session, url, on_announce_done, d, TR_WEB_IP_PROTO_V4);
+
+        // Then strip the "ipv6=..." part and try to send via IPv6:
+        url[no_ipv6_cutoff] = '\0';
+        dbgmsg(request->log_name, "Sending IPv6 announce to libcurl: \"%s\"", url);
+        tr_webRunWithIpProto(session, url, on_announce_done, d, TR_WEB_IP_PROTO_V6);
+    }
+    else
+    {
+        d->requests_sent_count = 1;
+
+        // Don't care about IP version when announcing
+        dbgmsg(request->log_name, "Sending announce to libcurl: \"%s\"", url);
+        tr_webRun(session, url, on_announce_done, d);
+    }
 
     tr_free(url);
 }

@@ -66,6 +66,7 @@ struct tr_web_task
     char* cookies;
     tr_session* session;
     tr_web_done_func done_func;
+    tr_web_ip_proto ip_proto;
     void* done_func_user_data;
     CURL* curl_easy;
     struct tr_web_task* next;
@@ -256,6 +257,22 @@ static CURL* createEasy(tr_session* s, struct tr_web* web, struct tr_web_task* t
     curl_easy_setopt(e, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(e, CURLOPT_PRIVATE, task);
 
+#if LIBCURL_VERSION_NUM <= CURL_VERSION_BITS(7, 76, 1)
+    /*
+     * Up to Curl 7.76.1, if we explicitly choose the IP version we want to
+     * use, it is still possible that the wrong IP version is used. To work
+     * around the issue, we must disable DNS cache and connection reuse.
+     */
+    if (task->ip_proto != TR_WEB_IP_PROTO_ANY)
+    {
+        curl_easy_setopt(e, CURLOPT_DNS_CACHE_TIMEOUT, 0L);
+        curl_easy_setopt(e, CURLOPT_FORBID_REUSE, 1L);
+    }
+
+#endif
+
+    curl_easy_setopt(e, CURLOPT_IPRESOLVE, task->ip_proto);
+
 #ifdef USE_LIBCURL_SOCKOPT
     curl_easy_setopt(e, CURLOPT_SOCKOPTFUNCTION, sockoptfunction);
     curl_easy_setopt(e, CURLOPT_SOCKOPTDATA, task);
@@ -340,7 +357,7 @@ static void tr_webThreadFunc(void* vsession);
 
 static struct tr_web_task* tr_webRunImpl(tr_session* session, int torrentId, char const* url, char const* range,
     char const* cookies, tr_web_done_func done_func, void* done_func_user_data,
-    struct evbuffer* buffer)
+    struct evbuffer* buffer, tr_web_ip_proto ip_proto)
 {
     struct tr_web_task* task = NULL;
 
@@ -363,6 +380,7 @@ static struct tr_web_task* tr_webRunImpl(tr_session* session, int torrentId, cha
         task->range = tr_strdup(range);
         task->cookies = tr_strdup(cookies);
         task->done_func = done_func;
+        task->ip_proto = ip_proto;
         task->done_func_user_data = done_func_user_data;
         task->response = buffer != NULL ? buffer : evbuffer_new();
         task->freebuf = buffer != NULL ? NULL : task->response;
@@ -379,7 +397,13 @@ static struct tr_web_task* tr_webRunImpl(tr_session* session, int torrentId, cha
 struct tr_web_task* tr_webRunWithCookies(tr_session* session, char const* url, char const* cookies, tr_web_done_func done_func,
     void* done_func_user_data)
 {
-    return tr_webRunImpl(session, -1, url, NULL, cookies, done_func, done_func_user_data, NULL);
+    return tr_webRunImpl(session, -1, url, NULL, cookies, done_func, done_func_user_data, NULL, TR_WEB_IP_PROTO_ANY);
+}
+
+struct tr_web_task* tr_webRunWithIpProto(tr_session* session, char const* url, tr_web_done_func done_func,
+    void* done_func_user_data, tr_web_ip_proto ip_proto)
+{
+    return tr_webRunImpl(session, -1, url, NULL, NULL, done_func, done_func_user_data, NULL, ip_proto);
 }
 
 struct tr_web_task* tr_webRun(tr_session* session, char const* url, tr_web_done_func done_func, void* done_func_user_data)
@@ -390,7 +414,8 @@ struct tr_web_task* tr_webRun(tr_session* session, char const* url, tr_web_done_
 struct tr_web_task* tr_webRunWebseed(tr_torrent* tor, char const* url, char const* range, tr_web_done_func done_func,
     void* done_func_user_data, struct evbuffer* buffer)
 {
-    return tr_webRunImpl(tor->session, tr_torrentId(tor), url, range, NULL, done_func, done_func_user_data, buffer);
+    return tr_webRunImpl(tor->session, tr_torrentId(
+        tor), url, range, NULL, done_func, done_func_user_data, buffer, TR_WEB_IP_PROTO_ANY);
 }
 
 static void tr_webThreadFunc(void* vsession)

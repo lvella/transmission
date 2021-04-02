@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <curl/curl.h>
 #include "tr-macros.h"
 
 TR_BEGIN_DECLS
@@ -22,6 +23,14 @@ typedef enum
 }
 tr_web_close_mode;
 
+typedef enum
+{
+    TR_WEB_IP_PROTO_ANY = CURL_IPRESOLVE_WHATEVER,
+    TR_WEB_IP_PROTO_V4 = CURL_IPRESOLVE_V4,
+    TR_WEB_IP_PROTO_V6 = CURL_IPRESOLVE_V6
+}
+tr_web_ip_proto;
+
 void tr_webClose(tr_session* session, tr_web_close_mode close_mode);
 
 typedef void (* tr_web_done_func)(tr_session* session, bool did_connect_flag, bool timeout_flag, long response_code,
@@ -30,6 +39,9 @@ typedef void (* tr_web_done_func)(tr_session* session, bool did_connect_flag, bo
 char const* tr_webGetResponseStr(long response_code);
 
 struct tr_web_task* tr_webRun(tr_session* session, char const* url, tr_web_done_func done_func, void* done_func_user_data);
+
+struct tr_web_task* tr_webRunWithIpProto(tr_session* session, char const* url, tr_web_done_func done_func,
+    void* done_func_user_data, tr_web_ip_proto ip_proto);
 
 struct tr_web_task* tr_webRunWithCookies(tr_session* session, char const* url, char const* cookies, tr_web_done_func done_func,
     void* done_func_user_data);
