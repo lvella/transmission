@@ -296,6 +296,9 @@ struct tau_announce_request
     tr_announce_response response;
     tr_announce_response_func callback;
     void* user_data;
+
+    uint8_t sent_request_count;
+    uint8_t received_response_count;
 };
 
 typedef enum
@@ -356,6 +359,8 @@ static struct tau_announce_request* tau_announce_request_new(tr_announce_request
     req->user_data = user_data;
     req->payload_len = evbuffer_get_length(buf);
     req->payload = tr_memdup(evbuffer_pullup(buf, -1), req->payload_len);
+    req->sent_request_count = 0;
+    req->received_response_count = 0;
     req->response.seeders = -1;
     req->response.leechers = -1;
     req->response.downloads = -1;
@@ -376,33 +381,45 @@ static void tau_announce_request_free(struct tau_announce_request* req)
     tr_free(req);
 }
 
-static void tau_announce_request_finished(struct tau_announce_request const* request)
+static void tau_announce_request_finished(struct tau_announce_request* request)
 {
     if (request->callback != NULL)
     {
         request->callback(&request->response, request->user_data);
     }
+
+    request->received_response_count = request->sent_request_count;
 }
 
-static void tau_announce_request_fail(struct tau_announce_request* request, bool did_connect, bool did_timeout,
+static void tau_announce_request_fail(struct tau_announce_request* request, bool did_connect, bool did_timeout, bool final,
     char const* errmsg)
 {
-    request->response.did_connect = did_connect;
-    request->response.did_timeout = did_timeout;
-    request->response.errmsg = tr_strdup(errmsg);
-    tau_announce_request_finished(request);
+    TR_ASSERT(request->received_response_count < request->sent_request_count);
+
+    if (request->received_response_count++ == 0)
+    {
+        request->response.did_connect = did_connect;
+        request->response.did_timeout = did_timeout;
+        request->response.errmsg = tr_strdup(errmsg);
+    }
+
+    if (final || request->received_response_count == request->sent_request_count)
+    {
+        tau_announce_request_finished(request);
+    }
 }
 
 static void on_announce_response(struct tau_announce_request* request, tau_action_t action, struct evbuffer* buf)
 {
     size_t const buflen = evbuffer_get_length(buf);
 
-    request->response.did_connect = true;
-    request->response.did_timeout = false;
-
     if (action == TAU_ACTION_ANNOUNCE && buflen >= 3 * sizeof(uint32_t))
     {
         tr_announce_response* resp = &request->response;
+        resp->did_connect = true;
+        resp->did_timeout = false;
+        tr_free(resp->errmsg);
+        resp->errmsg = NULL;
         resp->interval = evbuffer_read_ntoh_32(buf);
         resp->leechers = evbuffer_read_ntoh_32(buf);
         resp->seeders = evbuffer_read_ntoh_32(buf);
@@ -423,7 +440,7 @@ static void on_announce_response(struct tau_announce_request* request, tau_actio
             errmsg = tr_strdup(_("Unknown error"));
         }
 
-        tau_announce_request_fail(request, true, false, errmsg);
+        tau_announce_request_fail(request, true, false, false, errmsg);
         tr_free(errmsg);
     }
 }
@@ -495,7 +512,7 @@ static void tau_tracker_fail_all(struct tau_tracker* tracker, bool did_connect, 
 
     for (int i = 0, n = tr_ptrArraySize(reqs); i < n; ++i)
     {
-        tau_announce_request_fail(tr_ptrArrayNth(reqs, i), did_connect, did_timeout, errmsg);
+        tau_announce_request_fail(tr_ptrArrayNth(reqs, i), did_connect, did_timeout, true, errmsg);
     }
 
     tr_ptrArrayDestruct(reqs, (PtrArrayForeachFunc)tau_announce_request_free);
@@ -534,6 +551,41 @@ static void tau_tracker_send_request(struct tau_tracker* tracker, void const* pa
     evbuffer_free(buf);
 }
 
+static unsigned tau_tracker_send_request_via_both_ips(struct tau_tracker* tracker, void const* payload, size_t payload_len)
+{
+    unsigned sent_count = 0;
+    struct evutil_addrinfo* addr;
+    bool sent_ipv4 = false;
+    bool sent_ipv6 = false;
+    struct evbuffer* buf = evbuffer_new();
+
+    dbgmsg(tracker->key, "sending request w/connection id %" PRIu64 " via both IPv4 and IPv6\n", tracker->connection_id);
+    evbuffer_add_hton_64(buf, tracker->connection_id);
+    evbuffer_add_reference(buf, payload, payload_len, NULL, NULL);
+
+    for (addr = tracker->addr; addr != NULL && sent_count < 2; addr = addr->ai_next)
+    {
+        if (!sent_ipv4 && addr->ai_family == AF_INET)
+        {
+            sent_ipv4 = true;
+        }
+        else if (!sent_ipv6 && addr->ai_family == AF_INET6)
+        {
+            sent_ipv6 = true;
+        }
+        else
+        {
+            continue;
+        }
+
+        (void)tau_sendto(tracker->session, addr, tracker->port, evbuffer_pullup(buf, -1), evbuffer_get_length(buf));
+        ++sent_count;
+    }
+
+    evbuffer_free(buf);
+    return sent_count;
+}
+
 static void tau_tracker_send_reqs(struct tau_tracker* tracker)
 {
     TR_ASSERT(tracker->dns_request == NULL);
@@ -554,7 +606,15 @@ static void tau_tracker_send_reqs(struct tau_tracker* tracker)
         {
             dbgmsg(tracker->key, "sending announce req %p", (void*)req);
             req->sent_at = now;
-            tau_tracker_send_request(tracker, req->payload, req->payload_len);
+            if (tr_globalIPv6() == NULL)
+            {
+                tau_tracker_send_request(tracker, req->payload, req->payload_len);
+                req->sent_request_count = 1;
+            }
+            else
+            {
+                req->sent_request_count = tau_tracker_send_request_via_both_ips(tracker, req->payload, req->payload_len);
+            }
 
             if (req->callback == NULL)
             {
@@ -644,7 +704,7 @@ static void tau_tracker_timeout_reqs(struct tau_tracker* tracker)
         if (cancel_all || req->created_at + TAU_REQUEST_TTL < now)
         {
             dbgmsg(tracker->key, "timeout announce req %p", (void*)req);
-            tau_announce_request_fail(req, false, true, NULL);
+            tau_announce_request_fail(req, false, true, true, NULL);
             tau_announce_request_free(req);
             tr_ptrArrayRemove(reqs, i);
             --i;
@@ -722,7 +782,8 @@ static void tau_tracker_upkeep_ex(struct tau_tracker* tracker, bool timeout_reqs
         evbuffer_add_hton_64(buf, 0x41727101980LL);
         evbuffer_add_hton_32(buf, TAU_ACTION_CONNECT);
         evbuffer_add_hton_32(buf, tracker->connection_transaction_id);
-        (void)tau_sendto(tracker->session, tracker->addr, tracker->port, evbuffer_pullup(buf, -1), evbuffer_get_length(buf));
+        (void)tau_sendto(tracker->session, tracker->addr, tracker->port, evbuffer_pullup(buf, -1), evbuffer_get_length(
+            buf));
         evbuffer_free(buf);
         return;
     }
@@ -948,9 +1009,13 @@ bool tau_handle_message(tr_session* session, uint8_t const* msg, size_t msglen)
             if (req->sent_at != 0 && transaction_id == req->transaction_id)
             {
                 dbgmsg(tracker->key, "%" PRIu32 " is an announce request!", transaction_id);
-                tr_ptrArrayRemove(reqs, j);
                 on_announce_response(req, action_id, buf);
-                tau_announce_request_free(req);
+                if (req->sent_request_count == req->received_response_count)
+                {
+                    tr_ptrArrayRemove(reqs, j);
+                    tau_announce_request_free(req);
+                }
+
                 evbuffer_free(buf);
                 return true;
             }
