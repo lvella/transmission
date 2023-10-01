@@ -251,6 +251,26 @@ void announce_url_new(tr_urlbuf& url, tr_session const* session, tr_announce_req
     return fmt::format("&ip={:s}", ip);
 }
 
+std::string known_public_ip_addresses(tr_session const* session)
+{
+    std::string ret;
+
+    auto ipv4 = session->global_address(TR_AF_INET);
+    if (ipv4)
+    {
+        ret += "&ipv4=";
+        tr_urlPercentEncode(std::back_inserter(ret), ipv4->display_name());
+    }
+
+    auto ipv6 = session->global_address(TR_AF_INET6);
+    if (ipv6)
+    {
+        ret += "&ipv6=";
+        tr_urlPercentEncode(std::back_inserter(ret), ipv6->display_name());
+    }
+    return ret;
+}
+
 } // namespace announce_helpers
 } // namespace
 
@@ -306,6 +326,8 @@ void tr_tracker_http_announce(
     else
     {
         d->requests_sent_count = 2;
+
+        options.url += known_public_ip_addresses(session);
 
         // First try to send the announce via IPv4:
         auto ipv4_options = options;
