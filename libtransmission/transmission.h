@@ -1603,6 +1603,9 @@ struct tr_stat
     /** True if the torrent is running, but has been idle for long enough
         to be considered stalled.  @see `tr_sessionGetQueueStalledMinutes()` */
     bool isStalled;
+
+    /** True if the torrent is in the process of being deleted */
+    bool isDeleting;
 };
 
 /** Return a pointer to an `tr_stat` structure with updated information

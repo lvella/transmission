@@ -1475,6 +1475,7 @@ tr_stat const* tr_torrentStat(tr_torrent* tor)
     s->queuePosition = tor->queuePosition;
     s->idleSecs = torrentGetIdleSecs(tor, s->activity);
     s->isStalled = tr_torrentIsStalled(tor, s->idleSecs);
+    s->isDeleting = tor->is_deleting_;
     s->errorString = tor->error_string.c_str();
 
     s->peersConnected = swarm_stats.peer_count;

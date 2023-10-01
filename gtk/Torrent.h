@@ -45,6 +45,7 @@ public:
         ACTIVE,
         ACTIVITY,
         ADDED_DATE,
+        DELETING,
         ERROR_CODE,
         ERROR_MESSAGE,
         ETA,

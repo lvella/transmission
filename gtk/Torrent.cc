@@ -181,6 +181,7 @@ public:
         bool has_metadata = {};
         bool has_seed_ratio = {};
         bool stalled = {};
+        bool deleting = {};
     };
 
 public:
@@ -280,6 +281,7 @@ Torrent::ChangeFlags Torrent::Impl::update_cache()
     update_cache_value(cache_.mime_type, get_mime_type(*raw_torrent_), result, ChangeFlag::MIME_TYPE);
     update_cache_value(cache_.has_metadata, tr_torrentHasMetadata(raw_torrent_), result, ChangeFlag::HAS_METADATA);
     update_cache_value(cache_.stalled, stats->isStalled, result, ChangeFlag::STALLED);
+    update_cache_value(cache_.deleting, stats->isDeleting, result, ChangeFlag::DELETING);
     update_cache_value(cache_.ratio, stats->ratio, 0.01F, result, ChangeFlag::RATIO);
 
     update_cache_value(cache_.added_date, stats->addedDate, result, ChangeFlag::ADDED_DATE);
@@ -386,6 +388,11 @@ Glib::RefPtr<Gio::Icon> Torrent::Impl::get_icon() const
 
 Glib::ustring Torrent::Impl::get_short_status_text() const
 {
+    if (cache_.deleting)
+    {
+        return _("Removing");
+    }
+
     switch (cache_.activity)
     {
     case TR_STATUS_STOPPED:
