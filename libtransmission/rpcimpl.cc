@@ -241,7 +241,19 @@ char const* torrentStop(tr_session* session, tr_variant::Map const& args_in, tr_
 
 char const* torrentRemove(tr_session* session, tr_variant::Map const& args_in, tr_variant::Map& /*args_out*/)
 {
-    auto const delete_flag = args_in.value_if<bool>(TR_KEY_delete_local_data).value_or(false);
+    bool delete_flag = false;
+
+    auto const delete_flag_bool = args_in.value_if<bool>(TR_KEY_delete_local_data);
+    if (!delete_flag_bool.has_value())
+    {
+        auto delete_flag_int = args_in.value_if<long>(TR_KEY_delete_local_data).value_or(0);
+        delete_flag = (delete_flag_int != 0);
+    }
+    else
+    {
+        delete_flag = *delete_flag_bool;
+    }
+
     auto const type = delete_flag ? TR_RPC_TORRENT_TRASHING : TR_RPC_TORRENT_REMOVING;
 
     for (auto* tor : getTorrents(session, args_in))
