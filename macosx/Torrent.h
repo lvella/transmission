@@ -42,7 +42,6 @@ extern NSString* const kTorrentDidChangeGroupNotification;
 - (void)startTransfer;
 - (void)startMagnetTransferAfterMetaDownload;
 - (void)stopTransfer;
-- (void)startQueue;
 - (void)sleep;
 - (void)wakeUp;
 - (void)idleLimitHit;
@@ -194,10 +193,9 @@ extern NSString* const kTorrentDidChangeGroupNotification;
 
 //methods require fileStats to have been updated recently to be accurate
 - (CGFloat)fileProgress:(FileListNode*)node;
-- (BOOL)canChangeDownloadCheckForFile:(NSUInteger)index;
 - (BOOL)canChangeDownloadCheckForFiles:(NSIndexSet*)indexSet;
-- (NSInteger)checkForFiles:(NSIndexSet*)indexSet;
-- (void)setFileCheckState:(NSInteger)state forIndexes:(NSIndexSet*)indexSet;
+- (NSControlStateValue)checkForFiles:(NSIndexSet*)indexSet;
+- (void)setFileCheckState:(NSControlStateValue)state forIndexes:(NSIndexSet*)indexSet;
 - (void)setFilePriority:(tr_priority_t)priority forIndexes:(NSIndexSet*)indexSet;
 - (BOOL)hasFilePriority:(tr_priority_t)priority forIndexes:(NSIndexSet*)indexSet;
 - (NSSet*)filePrioritiesForIndexes:(NSIndexSet*)indexSet;

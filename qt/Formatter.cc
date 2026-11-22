@@ -47,6 +47,14 @@ QString Formatter::storage_to_string(int64_t const bytes)
     return storage_to_string(static_cast<uint64_t>(bytes));
 }
 
+QString Formatter::ratio_to_string(double ratio)
+{
+    static auto constexpr Infinity = "\xE2\x88\x9E"sv;
+    static auto const None = tr("None").toStdString();
+
+    return QString::fromStdString(tr_strratio(ratio, None, Infinity));
+}
+
 QString Formatter::time_to_string(int seconds)
 {
     seconds = std::max(seconds, 0);

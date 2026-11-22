@@ -8,6 +8,7 @@ target_sources(${TR_NAME}-gtk
         Actions.h
         Application.cc
         Application.h
+        DBusTransport.cc
         DetailsDialog.cc
         DetailsDialog.h
         Dialogs.cc
@@ -70,6 +71,7 @@ target_sources(${TR_NAME}-gtk
         TorrentFilter.h
         TorrentSorter.cc
         TorrentSorter.h
+        Transports.h
         Utils.cc
         Utils.h)
 
@@ -142,15 +144,31 @@ tr_target_glib_resources(${TR_NAME}-gtk
     transmission.gresource.xml
     ${UI_SUBDIR}/transmission-ui.gresource.xml)
 
+# TR_GTK_APP_ID comes from the top-level CMakeLists, which sets it early enough for tests/ to see.
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/transmission-gtk.desktop.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/transmission-gtk.desktop.in"
+    @ONLY)
+
+# One name for the finished file whether or not it went through gettext,
+# so the install and the test both have one path to name.
+set(DESKTOP_FILE "${CMAKE_CURRENT_BINARY_DIR}/${TR_NAME}-gtk.desktop")
+
 if(ENABLE_NLS)
-    set(DESKTOP_FILE "${CMAKE_CURRENT_BINARY_DIR}/${TR_NAME}-gtk.desktop")
     tr_gettext_msgfmt(${TR_NAME}-gtk
         ${DESKTOP_FILE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/transmission-gtk.desktop.in)
+        ${CMAKE_CURRENT_BINARY_DIR}/transmission-gtk.desktop.in)
     target_sources(${TR_NAME}-gtk
         PRIVATE
             ${DESKTOP_FILE})
+else()
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/transmission-gtk.desktop.in"
+        "${DESKTOP_FILE}"
+        @ONLY)
+endif()
 
+if(ENABLE_NLS)
     set(METAINFO_FILE "${CMAKE_CURRENT_BINARY_DIR}/${TR_NAME}-gtk.metainfo.xml")
     tr_gettext_msgfmt(${TR_NAME}-gtk
         ${METAINFO_FILE}
@@ -162,25 +180,10 @@ endif()
 
 target_compile_definitions(${TR_NAME}-gtk
     PRIVATE
+        "TR_GTK_APP_ID=\"${TR_GTK_APP_ID}\""
         TRANSMISSIONLOCALEDIR="${CMAKE_INSTALL_FULL_LOCALEDIR}"
         GETTEXT_PACKAGE="${TR_NAME}-gtk"
         $<$<BOOL:${ENABLE_UTP}>:WITH_UTP>)
-
-if(NOT ENABLE_DEPRECATED)
-    target_compile_definitions(${TR_NAME}-gtk
-        PRIVATE
-            G_DISABLE_DEPRECATED
-            GDK_PIXBUF_DISABLE_DEPRECATED
-            GDK_DISABLE_DEPRECATED
-            GTK_DISABLE_DEPRECATED
-            PANGO_DISABLE_DEPRECATED
-            GDKMM_DISABLE_DEPRECATED
-            GIOMM_DISABLE_DEPRECATED
-            GLIBMM_DISABLE_DEPRECATED
-            GTKMM_DISABLE_DEPRECATED
-            PANGOMM_DISABLE_DEPRECATED
-            SIGCXX_DISABLE_DEPRECATED)
-endif()
 
 target_compile_options(${TR_NAME}-gtk
     PRIVATE
@@ -197,6 +200,7 @@ target_include_directories(${TR_NAME}-gtk SYSTEM
 
 target_link_libraries(${TR_NAME}-gtk
     PRIVATE
+        ${TR_NAME}-app
         ${TR_NAME}
         transmission::gtk_impl
         fmt::fmt-header-only
@@ -225,8 +229,9 @@ set(ICON_NAME_REGEX "^([^_]+)_([^_]+)_([^_]+)_(.+)$")
 foreach(ICON ${PUBLIC_ICONS})
     string(REGEX REPLACE ${ICON_NAME_REGEX} "\\1/\\3/\\2" ICON_DIR ${ICON})
     string(REGEX REPLACE ${ICON_NAME_REGEX} "\\4" ICON_NAME ${ICON})
+    string(REGEX REPLACE "^transmission" "transmission-gtk" ICON_NAME ${ICON_NAME})
     install(
-        FILES icons/${ICON}
+        FILES ${SOURCE_ICONS_DIR}/${ICON}
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/${ICON_DIR}/
         RENAME ${ICON_NAME})
 endforeach()
@@ -237,16 +242,12 @@ if(INSTALL_DOC)
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 endif()
 
+install(
+    FILES ${DESKTOP_FILE}
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+
 if(ENABLE_NLS)
-    install(
-        FILES ${DESKTOP_FILE}
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
     install(
         FILES ${METAINFO_FILE}
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
-else()
-    install(
-        FILES transmission-gtk.desktop.in
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
-        RENAME ${TR_NAME}-gtk.desktop)
 endif()

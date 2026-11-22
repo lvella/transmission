@@ -27,6 +27,8 @@ class tr_metainfo_builder
 public:
     explicit tr_metainfo_builder(std::string_view single_file_or_parent_directory);
 
+    ~tr_metainfo_builder() = default;
+
     tr_metainfo_builder(tr_metainfo_builder&&) = delete;
     tr_metainfo_builder(tr_metainfo_builder const&) = delete;
     tr_metainfo_builder& operator=(tr_metainfo_builder&&) = delete;
@@ -122,12 +124,12 @@ public:
 
     [[nodiscard]] TR_CONSTEXPR20 auto file_count() const noexcept
     {
-        return files_.fileCount();
+        return files_.file_count();
     }
 
     [[nodiscard]] TR_CONSTEXPR20 auto file_size(tr_file_index_t i) const noexcept
     {
-        return files_.fileSize(i);
+        return files_.file_size(i);
     }
 
     [[nodiscard]] constexpr auto is_private() const noexcept
@@ -167,7 +169,7 @@ public:
 
     [[nodiscard]] constexpr auto total_size() const noexcept
     {
-        return files_.totalSize();
+        return files_.total_size();
     }
 
     [[nodiscard]] constexpr auto const& webseeds() const noexcept
@@ -182,7 +184,7 @@ public:
     [[nodiscard]] constexpr static bool is_legal_piece_size(uint32_t x)
     {
         // It must be a power of two and at least 16KiB
-        auto const MinSize = uint32_t{ 1024U * 16U };
+        auto constexpr MinSize = uint32_t{ 1024U * 16U };
         auto const is_power_of_two = (x & (x - 1)) == 0;
         return x >= MinSize && is_power_of_two;
     }

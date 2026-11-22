@@ -12,7 +12,7 @@
 #include <string>
 #include <string_view>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include "libtransmission/crypto-utils.h"
 #include "libtransmission/error-types.h"
@@ -235,7 +235,7 @@ bool tr_magnet_metainfo::parseMagnet(std::string_view magnet_link, tr_error* err
     }
 
     bool got_hash = false;
-    for (auto const& [key, value] : tr_url_query_view{ parsed->query })
+    for (auto const& [key, value] : parsed->query_entries())
     {
         if (key == "dn"sv)
         {

@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include <cstddef> // size_t
 #include <utility>
 
 #include <QPointer>
@@ -19,30 +18,18 @@ class QHeaderView;
 class QIcon;
 class QModelIndex;
 
-#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
-
-namespace std
-{
-
-template<>
-struct hash<QString>
-{
-    std::size_t operator()(QString const& s) const
-    {
-        return qHash(s);
-    }
-};
-
-} // namespace std
-
-#endif
-
 class Utils
 {
 public:
     static QIcon getIconFromIndex(QModelIndex const& index);
 
     static QString removeTrailingDirSeparator(QString const& path);
+
+    // QString from UTF-8 bytes without an intermediate std::string.
+    [[nodiscard]] static QString toQString(std::string_view const sv)
+    {
+        return QString::fromUtf8(std::data(sv), static_cast<int>(std::size(sv)));
+    }
 
     static void narrowRect(QRect& rect, int dx1, int dx2, Qt::LayoutDirection direction)
     {

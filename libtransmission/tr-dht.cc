@@ -30,7 +30,7 @@
 #include <netinet/in.h> /* sockaddr_in */
 #endif
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include "libtransmission/transmission.h"
 
@@ -90,6 +90,7 @@ extern "C"
 
     int dht_sendto(int sockfd, void const* buf, int len, int flags, struct sockaddr const* to, int tolen)
     {
+        // NOLINTNEXTLINE(readability-redundant-casting)
         return static_cast<int>(sendto(sockfd, static_cast<char const*>(buf), len, flags, to, tolen));
     }
 
@@ -163,8 +164,9 @@ public:
         tr_logAddTrace("Uninitializing DHT");
 
         // Since we only save known good nodes,
-        // only overwrite older data if we know enough nodes.
-        if (is_ready(AF_INET) || is_ready(AF_INET6))
+        // only overwrite older data if we know enough nodes --
+        // and only when this session may write the config dir.
+        if (mediator_.may_write_config_dir() && (is_ready(AF_INET) || is_ready(AF_INET6)))
         {
             save_state();
         }
@@ -221,7 +223,7 @@ private:
 
     [[nodiscard]] SwarmStatus swarm_status(int family, int* const setme_node_count = nullptr) const
     {
-        if (udp_socket(family) == TR_BAD_SOCKET)
+        if (!is_valid_socket(udp_socket(family)))
         {
             if (setme_node_count != nullptr)
             {
@@ -548,10 +550,11 @@ private:
 
             if (line_stream.bad() || std::empty(addrstr))
             {
-                tr_logAddWarn(fmt::format(
-                    _("Couldn't parse '{filename}' line: '{line}'"),
-                    fmt::arg("filename", filename),
-                    fmt::arg("line", line)));
+                tr_logAddWarn(
+                    fmt::format(
+                        fmt::runtime(_("Couldn't parse '{filename}' line: '{line}'")),
+                        fmt::arg("filename", filename),
+                        fmt::arg("line", line)));
             }
             else
             {
@@ -572,12 +575,13 @@ private:
         addrinfo* info = nullptr;
         if (int const rc = getaddrinfo(name, port_str.c_str(), &hints, &info); rc != 0)
         {
-            tr_logAddWarn(fmt::format(
-                _("Couldn't look up '{address}:{port}': {error} ({error_code})"),
-                fmt::arg("address", name),
-                fmt::arg("port", port_in.host()),
-                fmt::arg("error", gai_strerror(rc)),
-                fmt::arg("error_code", rc)));
+            tr_logAddWarn(
+                fmt::format(
+                    fmt::runtime(_("Couldn't look up '{address}:{port}': {error} ({error_code})")),
+                    fmt::arg("address", name),
+                    fmt::arg("port", port_in.host()),
+                    fmt::arg("error", gai_strerror(rc)),
+                    fmt::arg("error_code", rc)));
             return;
         }
 

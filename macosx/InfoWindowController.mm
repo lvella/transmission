@@ -89,7 +89,8 @@ typedef NS_ENUM(NSUInteger, TabTag) {
     windowRect.size.height = windowHeight;
     [window setFrame:windowRect display:NO];
 
-    window.becomesKeyOnlyIfNeeded = YES;
+    // Let inspector gain keyboard focus when clicked on non-interactive areas
+    window.becomesKeyOnlyIfNeeded = NO;
 
     //disable green maximise window button
     //https://github.com/transmission/transmission/issues/3486
@@ -102,21 +103,27 @@ typedef NS_ENUM(NSUInteger, TabTag) {
         [self.fTabs.cell setToolTip:toolTip forSegment:segment];
     };
     setImageAndToolTipForSegment(
-        [NSImage systemSymbol:@"info.circle" withFallback:@"InfoGeneral"],
+        [NSImage imageWithSystemSymbolName:@"info.circle" accessibilityDescription:nil],
         NSLocalizedString(@"General Info", "Inspector -> tab"),
         TabTagGeneral);
     setImageAndToolTipForSegment(
-        [NSImage systemSymbol:@"square.grid.3x3.fill.square" withFallback:@"InfoActivity"],
+        [NSImage imageWithSystemSymbolName:@"square.grid.3x3.fill.square" accessibilityDescription:nil],
         NSLocalizedString(@"Activity", "Inspector -> tab"),
         TabTagActivity);
     setImageAndToolTipForSegment(
-        [NSImage systemSymbol:@"antenna.radiowaves.left.and.right" withFallback:@"InfoTracker"],
+        [NSImage imageWithSystemSymbolName:@"antenna.radiowaves.left.and.right" accessibilityDescription:nil],
         NSLocalizedString(@"Trackers", "Inspector -> tab"),
         TabTagTrackers);
-    setImageAndToolTipForSegment([NSImage systemSymbol:@"person.2" withFallback:@"InfoPeers"], NSLocalizedString(@"Peers", "Inspector -> tab"), TabTagPeers);
-    setImageAndToolTipForSegment([NSImage systemSymbol:@"doc.on.doc" withFallback:@"InfoFiles"], NSLocalizedString(@"Files", "Inspector -> tab"), TabTagFile);
     setImageAndToolTipForSegment(
-        [NSImage systemSymbol:@"gearshape" withFallback:@"InfoOptions"],
+        [NSImage imageWithSystemSymbolName:@"person.2" accessibilityDescription:nil],
+        NSLocalizedString(@"Peers", "Inspector -> tab"),
+        TabTagPeers);
+    setImageAndToolTipForSegment(
+        [NSImage imageWithSystemSymbolName:@"doc.on.doc" accessibilityDescription:nil],
+        NSLocalizedString(@"Files", "Inspector -> tab"),
+        TabTagFile);
+    setImageAndToolTipForSegment(
+        [NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:nil],
         NSLocalizedString(@"Options", "Inspector -> tab"),
         TabTagOptions);
 
@@ -200,6 +207,18 @@ typedef NS_ENUM(NSUInteger, TabTag) {
     self.fTorrents = torrents;
 
     [self resetInfo];
+}
+
+- (void)removeTorrentsFromInfo:(NSArray<Torrent*>*)torrents
+{
+    if (self.fTorrents.count == 0 || torrents.count == 0)
+    {
+        return;
+    }
+
+    NSMutableArray<Torrent*>* remaining = [self.fTorrents mutableCopy];
+    [remaining removeObjectsInArray:torrents];
+    [self setInfoForTorrents:remaining];
 }
 
 - (NSRect)windowWillUseStandardFrame:(NSWindow*)window defaultFrame:(NSRect)defaultFrame
@@ -324,7 +343,7 @@ typedef NS_ENUM(NSUInteger, TabTag) {
     NSWindow* window = self.window;
 
     window.title = [NSString
-        stringWithFormat:@"%@ - %@", self.fViewController.title, NSLocalizedString(@"Torrent Inspector", "Inspector -> title")];
+        stringWithFormat:@"%@ — %@", self.fViewController.title, NSLocalizedString(@"Torrent Inspector", "Inspector -> title")];
 
     NSView* view = self.fViewController.view;
 

@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <libtransmission/transmission.h>
+
 #include <QVariant>
 
 class CustomVariantType
@@ -15,7 +17,10 @@ public:
         TrackerStatsList = QMetaType::User,
         PeerList,
         FileList,
-        FilterModeType,
-        SortModeType
+        ShowModeType,
+        SortModeType,
+        EncryptionModeType,
     };
 };
+
+Q_DECLARE_METATYPE(tr_encryption_mode)

@@ -11,7 +11,7 @@
 #include <sys/stat.h>
 #endif
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include "libtransmission/crypto-utils.h" // for tr_rand_obj()
 #include "libtransmission/error-types.h"
@@ -64,11 +64,12 @@ tr_sys_file_t create_lockfile(std::string_view session_id)
 
     if (error)
     {
-        tr_logAddWarn(fmt::format(
-            _("Couldn't create '{path}': {error} ({error_code})"),
-            fmt::arg("path", lockfile_path),
-            fmt::arg("error", error.message()),
-            fmt::arg("error_code", error.code())));
+        tr_logAddWarn(
+            fmt::format(
+                fmt::runtime(_("Couldn't create '{path}': {error} ({error_code})")),
+                fmt::arg("path", lockfile_path),
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
     }
 
     return lockfile_fd;
@@ -88,12 +89,6 @@ void destroy_lockfile(tr_sys_file_t lockfile_fd, std::string_view session_id)
         tr_sys_path_remove(lockfile_path);
     }
 }
-
-#ifndef _WIN32
-auto constexpr WouldBlock = EWOULDBLOCK;
-#else
-auto constexpr WouldBlock = ERROR_LOCK_VIOLATION;
-#endif
 
 } // namespace
 
@@ -128,14 +123,15 @@ bool tr_session_id::is_local(std::string_view session_id) noexcept
     auto error = tr_error{};
     if (auto lockfile_fd = tr_sys_file_open(lockfile_path, TR_SYS_FILE_READ, 0, &error); lockfile_fd == TR_BAD_SYS_FILE)
     {
-        if (TR_ERROR_IS_ENOENT(error.code()))
+        if (tr_error_is_enoent(error.code()))
         {
             error = {};
         }
     }
     else
     {
-        if (!tr_sys_file_lock(lockfile_fd, TR_SYS_FILE_LOCK_SH | TR_SYS_FILE_LOCK_NB, &error) && (error.code() == WouldBlock))
+        if (!tr_sys_file_lock(lockfile_fd, TR_SYS_FILE_LOCK_SH | TR_SYS_FILE_LOCK_NB, &error) &&
+            tr_sys_file_lock_error_is_contended(error))
         {
             is_local = true;
             error = {};
@@ -146,11 +142,12 @@ bool tr_session_id::is_local(std::string_view session_id) noexcept
 
     if (error)
     {
-        tr_logAddWarn(fmt::format(
-            _("Couldn't open session lock file '{path}': {error} ({error_code})"),
-            fmt::arg("path", lockfile_path),
-            fmt::arg("error", error.message()),
-            fmt::arg("error_code", error.code())));
+        tr_logAddWarn(
+            fmt::format(
+                fmt::runtime(_("Couldn't open session lock file '{path}': {error} ({error_code})")),
+                fmt::arg("path", lockfile_path),
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
     }
 
     return is_local;

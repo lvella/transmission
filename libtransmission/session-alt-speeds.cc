@@ -3,6 +3,7 @@
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
 
+#include <chrono>
 #include <cstddef> // size_t
 #include <ctime>
 #include <utility>
@@ -22,6 +23,7 @@ void tr_session_alt_speeds::load(Settings&& settings)
 {
     settings_ = std::move(settings);
     update_scheduler();
+    set_active(settings_.is_active, ChangeReason::LoadSettings, true);
 }
 
 void tr_session_alt_speeds::update_minutes()
@@ -66,9 +68,9 @@ void tr_session_alt_speeds::check_scheduler()
     }
 }
 
-void tr_session_alt_speeds::set_active(bool active, ChangeReason reason)
+void tr_session_alt_speeds::set_active(bool active, ChangeReason reason, bool force)
 {
-    if (auto& tgt = settings_.is_active; tgt != active)
+    if (auto& tgt = settings_.is_active; force || tgt != active)
     {
         tgt = active;
         mediator_.is_active_changed(tgt, reason);
@@ -77,9 +79,9 @@ void tr_session_alt_speeds::set_active(bool active, ChangeReason reason)
 
 [[nodiscard]] bool tr_session_alt_speeds::is_active_minute(time_t time) const noexcept
 {
-    auto const tm = fmt::localtime(time);
+    auto const tm = *std::localtime(&time);
 
-    size_t minute_of_the_week = tm.tm_wday * MinutesPerDay + tm.tm_hour * MinutesPerHour + tm.tm_min;
+    size_t minute_of_the_week = (tm.tm_wday * MinutesPerDay) + (tm.tm_hour * MinutesPerHour) + tm.tm_min;
 
     if (minute_of_the_week >= MinutesPerWeek) /* leap minutes? */
     {

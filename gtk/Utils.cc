@@ -9,6 +9,8 @@
 #include "PrefsDialog.h"
 #include "Session.h"
 
+#include <libtransmission-app/interop.h>
+
 #include <libtransmission/transmission.h> /* TR_RATIO_NA, TR_RATIO_INF */
 #include <libtransmission/error.h>
 #include <libtransmission/torrent-metainfo.h>
@@ -41,7 +43,7 @@
 #include <gtkmm/clipboard.h>
 #endif
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include <functional>
 #include <memory>
@@ -111,7 +113,7 @@ Glib::ustring gtr_get_unicode_string(GtrUnicode uni)
 
 Glib::ustring tr_strlratio(double ratio)
 {
-    return tr_strratio(ratio, gtr_get_unicode_string(GtrUnicode::Inf).c_str());
+    return tr_strratio(ratio, Q_("None"), gtr_get_unicode_string(GtrUnicode::Inf).c_str());
 }
 
 Glib::ustring tr_strlsize(libtransmission::Values::Storage const& storage)
@@ -132,28 +134,30 @@ std::string tr_format_future_time(time_t seconds)
     if (auto const days_from_now = seconds / 86400U; days_from_now > 0U)
     {
         return fmt::format(
-            ngettext("{days_from_now:L} day from now", "{days_from_now:L} days from now", days_from_now),
+            fmt::runtime(ngettext("{days_from_now:L} day from now", "{days_from_now:L} days from now", days_from_now)),
             fmt::arg("days_from_now", days_from_now));
     }
 
     if (auto const hours_from_now = (seconds % 86400U) / 3600U; hours_from_now > 0U)
     {
         return fmt::format(
-            ngettext("{hours_from_now:L} hour from now", "{hours_from_now:L} hours from now", hours_from_now),
+            fmt::runtime(ngettext("{hours_from_now:L} hour from now", "{hours_from_now:L} hours from now", hours_from_now)),
             fmt::arg("hours_from_now", hours_from_now));
     }
 
     if (auto const minutes_from_now = (seconds % 3600U) / 60U; minutes_from_now > 0U)
     {
         return fmt::format(
-            ngettext("{minutes_from_now:L} minute from now", "{minutes_from_now:L} minutes from now", minutes_from_now),
+            fmt::runtime(
+                ngettext("{minutes_from_now:L} minute from now", "{minutes_from_now:L} minutes from now", minutes_from_now)),
             fmt::arg("minutes_from_now", minutes_from_now));
     }
 
     if (auto const seconds_from_now = seconds % 60U; seconds_from_now > 0U)
     {
         return fmt::format(
-            ngettext("{seconds_from_now:L} second from now", "{seconds_from_now:L} seconds from now", seconds_from_now),
+            fmt::runtime(
+                ngettext("{seconds_from_now:L} second from now", "{seconds_from_now:L} seconds from now", seconds_from_now)),
             fmt::arg("seconds_from_now", seconds_from_now));
     }
 
@@ -164,27 +168,29 @@ std::string tr_format_past_time(time_t seconds)
 {
     if (auto const days_ago = seconds / 86400U; days_ago > 0U)
     {
-        return fmt::format(ngettext("{days_ago:L} day ago", "{days_ago:L} days ago", days_ago), fmt::arg("days_ago", days_ago));
+        return fmt::format(
+            fmt::runtime(ngettext("{days_ago:L} day ago", "{days_ago:L} days ago", days_ago)),
+            fmt::arg("days_ago", days_ago));
     }
 
     if (auto const hours_ago = (seconds % 86400U) / 3600U; hours_ago > 0U)
     {
         return fmt::format(
-            ngettext("{hours_ago:L} hour ago", "{hours_ago:L} hours ago", hours_ago),
+            fmt::runtime(ngettext("{hours_ago:L} hour ago", "{hours_ago:L} hours ago", hours_ago)),
             fmt::arg("hours_ago", hours_ago));
     }
 
     if (auto const minutes_ago = (seconds % 3600U) / 60U; minutes_ago > 0U)
     {
         return fmt::format(
-            ngettext("{minutes_ago:L} minute ago", "{minutes_ago:L} minutes ago", minutes_ago),
+            fmt::runtime(ngettext("{minutes_ago:L} minute ago", "{minutes_ago:L} minutes ago", minutes_ago)),
             fmt::arg("minutes_ago", minutes_ago));
     }
 
     if (auto const seconds_ago = seconds % 60U; seconds_ago > 0U)
     {
         return fmt::format(
-            ngettext("{seconds_ago:L} second ago", "{seconds_ago:L} seconds ago", seconds_ago),
+            fmt::runtime(ngettext("{seconds_ago:L} second ago", "{seconds_ago:L} seconds ago", seconds_ago)),
             fmt::arg("seconds_ago", seconds_ago));
     }
 
@@ -197,22 +203,26 @@ std::string tr_format_time(time_t timestamp)
 {
     if (auto const days = timestamp / 86400U; days > 0U)
     {
-        return fmt::format(ngettext("{days:L} day", "{days:L} days", days), fmt::arg("days", days));
+        return fmt::format(fmt::runtime(ngettext("{days:L} day", "{days:L} days", days)), fmt::arg("days", days));
     }
 
     if (auto const hours = (timestamp % 86400U) / 3600U; hours > 0U)
     {
-        return fmt::format(ngettext("{hours:L} hour", "{hours:L} hours", hours), fmt::arg("hours", hours));
+        return fmt::format(fmt::runtime(ngettext("{hours:L} hour", "{hours:L} hours", hours)), fmt::arg("hours", hours));
     }
 
     if (auto const minutes = (timestamp % 3600U) / 60U; minutes > 0U)
     {
-        return fmt::format(ngettext("{minutes:L} minute", "{minutes:L} minutes", minutes), fmt::arg("minutes", minutes));
+        return fmt::format(
+            fmt::runtime(ngettext("{minutes:L} minute", "{minutes:L} minutes", minutes)),
+            fmt::arg("minutes", minutes));
     }
 
     if (auto const seconds = timestamp % 60U; seconds > 0U)
     {
-        return fmt::format(ngettext("{seconds:L} second", "{seconds:L} seconds", seconds), fmt::arg("seconds", seconds));
+        return fmt::format(
+            fmt::runtime(ngettext("{seconds:L} second", "{seconds:L} seconds", seconds)),
+            fmt::arg("seconds", seconds));
     }
 
     return _("now");
@@ -223,28 +233,28 @@ std::string tr_format_time_left(time_t timestamp)
     if (auto const days_left = timestamp / 86400U; days_left > 0U)
     {
         return fmt::format(
-            ngettext("{days_left:L} day left", "{days_left:L} days left", days_left),
+            fmt::runtime(ngettext("{days_left:L} day left", "{days_left:L} days left", days_left)),
             fmt::arg("days_left", days_left));
     }
 
     if (auto const hours_left = (timestamp % 86400U) / 3600U; hours_left > 0U)
     {
         return fmt::format(
-            ngettext("{hours_left:L} hour left", "{hours_left:L} hours left", hours_left),
+            fmt::runtime(ngettext("{hours_left:L} hour left", "{hours_left:L} hours left", hours_left)),
             fmt::arg("hours_left", hours_left));
     }
 
     if (auto const minutes_left = (timestamp % 3600U) / 60U; minutes_left > 0U)
     {
         return fmt::format(
-            ngettext("{minutes_left:L} minute left", "{minutes_left:L} minutes left", minutes_left),
+            fmt::runtime(ngettext("{minutes_left:L} minute left", "{minutes_left:L} minutes left", minutes_left)),
             fmt::arg("minutes_left", minutes_left));
     }
 
     if (auto const seconds_left = timestamp % 60U; seconds_left > 0U)
     {
         return fmt::format(
-            ngettext("{seconds_left:L} second left", "{seconds_left:L} seconds left", seconds_left),
+            fmt::runtime(ngettext("{seconds_left:L} second left", "{seconds_left:L} seconds left", seconds_left)),
             fmt::arg("seconds_left", seconds_left));
     }
 
@@ -263,13 +273,13 @@ void gtr_add_torrent_error_dialog(Gtk::Widget& child, tr_torrent* duplicate_torr
     if (duplicate_torrent != nullptr)
     {
         secondary = fmt::format(
-            _("The torrent file '{path}' is already in use by '{torrent_name}'."),
+            fmt::runtime(_("The torrent file '{path}' is already in use by '{torrent_name}'.")),
             fmt::arg("path", filename),
             fmt::arg("torrent_name", tr_torrentName(duplicate_torrent)));
     }
     else
     {
-        secondary = fmt::format(_("Couldn't add torrent file '{path}'"), fmt::arg("path", filename));
+        secondary = fmt::format(fmt::runtime(_("Couldn't add torrent file '{path}'")), fmt::arg("path", filename));
     }
 
     auto w = std::make_shared<Gtk::MessageDialog>(
@@ -533,11 +543,12 @@ bool gtr_file_trash_or_remove(std::string const& filename, tr_error* error)
         catch (Glib::Error const& e)
         {
             error->set(e.code(), TR_GLIB_EXCEPTION_WHAT(e));
-            gtr_message(fmt::format(
-                _("Couldn't move '{path}' to trash: {error} ({error_code})"),
-                fmt::arg("path", filename),
-                fmt::arg("error", error->message()),
-                fmt::arg("error_code", error->code())));
+            gtr_message(
+                fmt::format(
+                    fmt::runtime(_("Couldn't move '{path}' to trash: {error} ({error_code})")),
+                    fmt::arg("path", filename),
+                    fmt::arg("error", error->message()),
+                    fmt::arg("error_code", error->code())));
         }
     }
 
@@ -551,11 +562,12 @@ bool gtr_file_trash_or_remove(std::string const& filename, tr_error* error)
         catch (Glib::Error const& e)
         {
             error->set(e.code(), TR_GLIB_EXCEPTION_WHAT(e));
-            gtr_message(fmt::format(
-                _("Couldn't remove '{path}': {error} ({error_code})"),
-                fmt::arg("path", filename),
-                fmt::arg("error", error->message()),
-                fmt::arg("error_code", error->code())));
+            gtr_message(
+                fmt::format(
+                    fmt::runtime(_("Couldn't remove '{path}': {error} ({error_code})")),
+                    fmt::arg("path", filename),
+                    fmt::arg("error", error->message()),
+                    fmt::arg("error_code", error->code())));
             result = false;
         }
     }
@@ -641,7 +653,7 @@ void gtr_open_uri(Glib::ustring const& uri)
 
         if (!opened)
         {
-            gtr_message(fmt::format(_("Couldn't open '{url}'"), fmt::arg("url", uri)));
+            gtr_message(fmt::format(fmt::runtime(_("Couldn't open '{url}'")), fmt::arg("url", uri)));
         }
     }
 }
@@ -852,13 +864,13 @@ void gtr_unrecognized_url_dialog(Gtk::Widget& parent, Glib::ustring const& url)
 
     auto w = std::make_shared<Gtk::MessageDialog>(
         gtr_widget_get_window(parent),
-        fmt::format(_("Unsupported URL: '{url}'"), fmt::arg("url", url)),
+        fmt::format(fmt::runtime(_("Unsupported URL: '{url}'")), fmt::arg("url", url)),
         false /*use markup*/,
         TR_GTK_MESSAGE_TYPE(ERROR),
         TR_GTK_BUTTONS_TYPE(CLOSE),
         true /*modal*/);
 
-    gstr += fmt::format(_("Transmission doesn't know how to use '{url}'"), fmt::arg("url", url));
+    gstr += fmt::format(fmt::runtime(_("Transmission doesn't know how to use '{url}'")), fmt::arg("url", url));
 
     if (tr_magnet_metainfo{}.parseMagnet(url.raw()))
     {
@@ -875,12 +887,40 @@ void gtr_unrecognized_url_dialog(Gtk::Widget& parent, Glib::ustring const& url)
 ****
 ***/
 
+std::string gtr_activation_token()
+{
+    if (auto token = tr::interop::activation_token(); !std::empty(token))
+    {
+        return token;
+    }
+
+    // GTK4 moves the token out of the environment before main() runs, into a stash of
+    // GDK's. The stash has no public getter, but GApplicationClass.add_platform_data is
+    // public, and GTK's override fills the platform data a remote GtkApplication would
+    // send from exactly that stash. Build that data on a throwaway application and read
+    // the token back out.
+    // GTK3 leaves the environment alone this early, so the code above answers there.
+    auto* const app = G_APPLICATION(g_object_new(GTK_TYPE_APPLICATION, "flags", G_APPLICATION_NON_UNIQUE, nullptr));
+
+    GVariantBuilder builder;
+    g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
+    G_APPLICATION_GET_CLASS(app)->add_platform_data(app, &builder);
+    auto* const data = g_variant_builder_end(&builder);
+
+    char const* token = nullptr;
+    g_variant_lookup(data, "activation-token", "&s", &token);
+    auto ret = std::string{ token != nullptr ? token : "" };
+
+    g_variant_unref(data);
+    g_object_unref(app);
+    return ret;
+}
+
 void gtr_paste_clipboard_url_into_entry(Gtk::Entry& entry)
 {
     auto const process = [&entry](Glib::ustring const& text)
     {
-        if (auto const sv = tr_strv_strip(text.raw());
-            !sv.empty() && (tr_urlIsValid(sv) || tr_magnet_metainfo{}.parseMagnet(sv)))
+        if (auto const sv = tr_strv_strip(text.raw()); tr::interop::is_metainfo_link(sv))
         {
             entry.set_text(text);
             return true;

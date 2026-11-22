@@ -67,7 +67,7 @@ private:
 // remove-during-emit; this is meant to be as lightweight
 // as possible for very basic use cases.
 template<typename... Args>
-class SimpleObservable
+class SimpleObservable // NOLINT(cppcoreguidelines-special-member-functions)
 {
     using Key = size_t;
 
@@ -81,12 +81,11 @@ public:
 
     [[nodiscard]] auto observe(Observer observer)
     {
-        auto const key = next_key_++;
+        auto const key = next_key++;
         observers_.emplace(key, std::move(observer));
-        return ObserverTag{ [this, key]()
-                            {
-                                remove(key);
-                            } };
+        // clang-format off: TODO: remove when we bump to clang-format >= 21
+        return ObserverTag{ [this, key]() { remove(key); } };
+        // clang-format on
     }
 
     void emit(Args... args) const
@@ -104,7 +103,7 @@ private:
         TR_ASSERT(n_removed == 1U);
     }
 
-    static auto inline next_key_ = Key{ 1U };
+    static auto inline next_key = Key{ 1U };
     small::map<Key, Observer, 4U> observers_;
 };
 

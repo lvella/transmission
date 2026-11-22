@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <utility> // std::exchange()
 #include <vector>
 
 #include <small/set.hpp>
@@ -44,9 +45,13 @@ void tr_file_piece_map::reset(tr_block_info const& block_info, uint64_t const* c
     for (tr_file_index_t i = 0U; i < n_files; ++i)
     {
         auto const file_size = file_sizes[i];
+
         auto const begin_byte = offset;
-        auto const begin_piece = block_info.byte_loc(begin_byte).piece;
         auto end_byte = tr_byte_index_t{};
+
+        // N.B. If the last file in the torrent is 0 bytes, and the torrent size is a multiple of piece size,
+        // then the computed piece index will be past-the-end. We handle this with std::min.
+        auto const begin_piece = std::min(block_info.byte_loc(begin_byte).piece, block_info.piece_count() - 1U);
         auto end_piece = tr_piece_index_t{};
 
         edge_pieces.insert(begin_piece);
@@ -63,7 +68,6 @@ void tr_file_piece_map::reset(tr_block_info const& block_info, uint64_t const* c
         else
         {
             end_byte = begin_byte;
-            // TODO(ckerr): should end_piece == begin_piece, same as _bytes are?
             end_piece = begin_piece + 1U;
         }
         file_bytes_[i] = byte_span_t{ begin_byte, end_byte };
@@ -144,35 +148,45 @@ tr_file_piece_map::file_offset_t tr_file_piece_map::file_offset(uint64_t const o
 
 // ---
 
-void tr_file_priorities::set(tr_file_index_t const file, tr_priority_t const new_priority)
+bool tr_file_priorities::set(tr_file_index_t const file, tr_priority_t const new_priority)
 {
+    if (file >= fpm_->file_count())
+    {
+        return false;
+    }
+
     if (std::empty(priorities_))
     {
         if (new_priority == TR_PRI_NORMAL)
         {
-            return;
+            return false;
         }
 
         priorities_.assign(fpm_->file_count(), TR_PRI_NORMAL);
         priorities_.shrink_to_fit();
     }
 
-    priorities_[file] = new_priority;
+    return std::exchange(priorities_[file], new_priority) != new_priority;
 }
 
-void tr_file_priorities::set(tr_file_index_t const* const files, size_t const n, tr_priority_t const new_priority)
+bool tr_file_priorities::set(tr_file_index_t const* const files, size_t const n, tr_priority_t const new_priority)
 {
+    if (std::any_of(files, files + n, [n_files = fpm_->file_count()](tr_file_index_t file) { return file >= n_files; }))
+    {
+        return false;
+    }
+
+    auto ret = false;
     for (size_t i = 0U; i < n; ++i)
     {
-        set(files[i], new_priority);
+        ret |= set(files[i], new_priority);
     }
+    return ret;
 }
 
 tr_priority_t tr_file_priorities::file_priority(tr_file_index_t const file) const
 {
-    TR_ASSERT(file < fpm_->file_count());
-
-    if (std::empty(priorities_))
+    if (file >= priorities_.size())
     {
         return TR_PRI_NORMAL;
     }

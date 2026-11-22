@@ -5,10 +5,20 @@
 
 import { AlertDialog } from './alert-dialog.js';
 import { Formatter } from './formatter.js';
+import { RPC } from './remote.js';
 import { createDialogContainer, makeUUID } from './utils.js';
 
+// iPadOS can report a desktop Mac user agent, so also check for touch support.
+const ua = navigator.userAgent;
+const is_apple_touch =
+  /iPad|iPhone|iPod/.test(ua) ||
+  (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+// https://github.com/transmission/transmission/pull/6320#issuecomment-1896968904
+// https://caniuse.com/input-file-accept
+const can_use_input_accept = !is_apple_touch;
+
 export class OpenDialog extends EventTarget {
-  constructor(controller, remote, url = '', files = []) {
+  constructor(controller, remote, url = '', files = null) {
     super();
 
     this.controller = controller;
@@ -18,7 +28,7 @@ export class OpenDialog extends EventTarget {
     this.elements.dismiss.addEventListener('click', () => this._onDismiss());
     this.elements.confirm.addEventListener('click', () => this._onConfirm());
     document.body.append(this.elements.root);
-    if (files.length > 0) {
+    if (files) {
       this.elements.file_input.files = files;
     }
     this._updateFreeSpaceInAddDialog();
@@ -47,8 +57,8 @@ export class OpenDialog extends EventTarget {
     const path = this.elements.folder_input.value;
     this.remote.getFreeSpace(path, (dir, bytes) => {
       if (!this.closed) {
-        const string = bytes > 0 ? `${Formatter.size(bytes)} Free` : '';
-        this.elements.freespace.textContent = string;
+        this.elements.freespace.textContent =
+          bytes > 0 ? `${Formatter.size(bytes)} Free` : '';
       }
     });
   }
@@ -69,20 +79,24 @@ export class OpenDialog extends EventTarget {
           return;
         }
         const o = {
-          arguments: {
-            'download-dir': destination,
+          id: 'webui',
+          jsonrpc: RPC._JsonRpcVersion,
+          method: 'torrent_add',
+          params: {
+            download_dir: destination,
             metainfo: contents.slice(Math.max(0, index + key.length)),
             paused,
           },
-          method: 'torrent-add',
         };
         remote.sendRequest(o, (response) => {
-          if (response.result !== 'success') {
-            alert(`Error adding "${file.name}": ${response.result}`);
+          if ('error' in response) {
+            const message =
+              response.error.data?.errorString ?? response.error.message;
+            alert(`Error adding "${file.name}": ${message}`);
             controller.setCurrentPopup(
               new AlertDialog({
                 heading: `Error adding "${file.name}"`,
-                message: response.result,
+                message,
               }),
             );
           }
@@ -97,19 +111,21 @@ export class OpenDialog extends EventTarget {
         url = `magnet:?xt=urn:btih:${url}`;
       }
       const o = {
-        arguments: {
-          'download-dir': destination,
+        id: 'webui',
+        jsonrpc: RPC._JsonRpcVersion,
+        method: 'torrent_add',
+        params: {
+          download_dir: destination,
           filename: url,
           paused,
         },
-        method: 'torrent-add',
       };
       remote.sendRequest(o, (payload) => {
-        if (payload.result !== 'success') {
+        if ('error' in payload) {
           controller.setCurrentPopup(
             new AlertDialog({
               heading: `Error adding "${url}"`,
-              message: payload.result,
+              message: payload.error.data?.errorString ?? payload.error.message,
             }),
           );
         }
@@ -137,7 +153,10 @@ export class OpenDialog extends EventTarget {
     input.type = 'file';
     input.name = 'torrent-files[]';
     input.id = input_id;
-    input.multiple = 'multiple';
+    input.multiple = true;
+    if (can_use_input_accept) {
+      input.accept = '.torrent,application/x-bittorrent';
+    }
     workarea.append(input);
     elements.file_input = input;
 
@@ -153,11 +172,6 @@ export class OpenDialog extends EventTarget {
     input.value = url;
     workarea.append(input);
     elements.url_input = input;
-    input.addEventListener('keyup', ({ key }) => {
-      if (key === 'Enter') {
-        confirm.click();
-      }
-    });
 
     input_id = makeUUID();
     label = document.createElement('label');
@@ -176,7 +190,7 @@ export class OpenDialog extends EventTarget {
     input.type = 'text';
     input.id = 'add-dialog-folder-input';
     input.addEventListener('change', () => this._updateFreeSpaceInAddDialog());
-    input.value = this.controller.session_properties['download-dir'];
+    input.value = this.controller.session_properties.download_dir;
     workarea.append(input);
     elements.folder_input = input;
 

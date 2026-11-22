@@ -15,8 +15,11 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
+
+#include <small/vector.hpp>
 
 #include <rapidjson/encodedstream.h>
 #include <rapidjson/encodings.h>
@@ -50,7 +53,7 @@ struct json_to_variant_handler : public rapidjson::BaseReaderHandler<>
 
     bool Null()
     {
-        *get_leaf() = tr_variant::unmanaged_string("");
+        *get_leaf() = nullptr;
         return true;
     }
 
@@ -89,14 +92,19 @@ struct json_to_variant_handler : public rapidjson::BaseReaderHandler<>
 
     bool String(Ch const* const str, rapidjson::SizeType const len, bool const copy)
     {
-        *get_leaf() = copy ? tr_variant{ std::string{ str, len } } : tr_variant::unmanaged_string({ str, len });
+        *get_leaf() = copy ? tr_variant{ std::string_view{ str, len } } : tr_variant::unmanaged_string({ str, len });
         return true;
     }
 
     bool StartObject()
     {
-        tr_variantInitDict(push_stack(), prealloc_guess());
-        return true;
+        if (auto* node = push_stack())
+        {
+            tr_variantInitDict(node, prealloc_guess());
+            return true;
+        }
+
+        return false;
     }
 
     bool Key(Ch const* const str, rapidjson::SizeType const len, bool const copy)
@@ -121,8 +129,13 @@ struct json_to_variant_handler : public rapidjson::BaseReaderHandler<>
 
     bool StartArray()
     {
-        tr_variantInitList(push_stack(), prealloc_guess());
-        return true;
+        if (auto* node = push_stack())
+        {
+            tr_variantInitList(node, prealloc_guess());
+            return true;
+        }
+
+        return false;
     }
 
     bool EndArray(rapidjson::SizeType const len)
@@ -140,7 +153,7 @@ private:
 
     tr_variant* push_stack() noexcept
     {
-        return stack_.emplace(get_leaf());
+        return std::size(stack_) < MaxDepth ? stack_.emplace(get_leaf()) : nullptr;
     }
 
     void pop_stack(rapidjson::SizeType const len) noexcept
@@ -203,11 +216,11 @@ private:
 
 std::optional<tr_variant> tr_variant_serde::parse_json(std::string_view input)
 {
-    auto* const begin = std::data(input);
-    TR_ASSERT(begin != nullptr); // RapidJSON will dereference a nullptr if this is false
+    auto* begin = std::data(input);
     if (begin == nullptr)
     {
-        return {};
+        // RapidJSON will dereference a nullptr otherwise
+        begin = "";
     }
 
     auto const size = std::size(input);
@@ -216,26 +229,34 @@ std::optional<tr_variant> tr_variant_serde::parse_json(std::string_view input)
     auto ms = rapidjson::MemoryStream{ begin, size };
     auto eis = rapidjson::AutoUTFInputStream<unsigned, rapidjson::MemoryStream>{ ms };
     auto reader = rapidjson::GenericReader<rapidjson::AutoUTF<unsigned>, rapidjson::UTF8<char>>{};
-    reader.Parse(eis, handler);
+    reader.Parse<rapidjson::kParseStopWhenDoneFlag>(eis, handler);
+
+    // Due to the nature of how AutoUTFInputStream works, when AutoUTFInputStream
+    // is used with MemoryStream, the read cursor position is always 1 ahead of
+    // the current character (unless the end of stream is reached).
+    auto const pos = eis.Peek() == '\0' ? eis.Tell() : eis.Tell() - 1U;
+    end_ = begin + pos;
 
     if (!reader.HasParseError())
     {
         return std::optional<tr_variant>{ std::move(top) };
     }
-
     if (auto err_code = reader.GetParseErrorCode(); err_code == rapidjson::kParseErrorDocumentEmpty)
     {
         error_.set(EINVAL, "No content");
     }
+    else if (err_code == rapidjson::kParseErrorTermination)
+    {
+        error_.set(E2BIG, "Max stack depth reached; unable to continue parsing");
+    }
     else
     {
-        auto const err_offset = reader.GetErrorOffset();
         error_.set(
             EILSEQ,
             fmt::format(
-                _("Couldn't parse JSON at position {position} '{text}': {error} ({error_code})"),
-                fmt::arg("position", err_offset),
-                fmt::arg("text", std::string_view{ begin + err_offset, std::min(size_t{ 16U }, size - err_offset) }),
+                fmt::runtime(_("Couldn't parse JSON at position {position} '{text}': {error} ({error_code})")),
+                fmt::arg("position", pos),
+                fmt::arg("text", std::string_view{ begin + pos, std::min(size_t{ 16U }, size - pos) }),
                 fmt::arg("error", rapidjson::GetParseError_En(err_code)),
                 fmt::arg("error_code", static_cast<std::underlying_type_t<decltype(err_code)>>(err_code))));
     }
@@ -249,106 +270,105 @@ namespace
 {
 namespace to_string_helpers
 {
-// implements RapidJSON's Stream concept, so that the library can output
-// directly to a std::string, and we can avoid some copying by copy elision
-// http://rapidjson.org/md_doc_stream.html
-struct string_output_stream
+// implements RapidJSON's write-only stream concept using fmt::memory_buffer.
+// See <rapidjson/stream.h> for details.
+struct FmtOutputStream
 {
     using Ch = char;
 
-    explicit string_output_stream(std::string& str)
-        : str_ref_{ str }
+    void Put(Ch const ch)
+    {
+        buf_.push_back(ch);
+    }
+
+    void Flush()
     {
     }
 
-    [[nodiscard]] static Ch Peek()
+    [[nodiscard]] std::string to_string() const
     {
-        TR_ASSERT(false);
-        return 0;
-    }
-
-    [[nodiscard]] static Ch Take()
-    {
-        TR_ASSERT(false);
-        return 0;
-    }
-
-    static size_t Tell()
-    {
-        TR_ASSERT(false);
-        return 0U;
-    }
-
-    static Ch* PutBegin()
-    {
-        TR_ASSERT(false);
-        return nullptr;
-    }
-
-    void Put(Ch const c)
-    {
-        str_ref_ += c;
-    }
-
-    static void Flush()
-    {
-    }
-
-    static size_t PutEnd(Ch* /*begin*/)
-    {
-        TR_ASSERT(false);
-        return 0U;
+        return fmt::to_string(buf_);
     }
 
 private:
-    std::string& str_ref_;
+    fmt::memory_buffer buf_;
 };
 
-using writer_var_t = std::variant<rapidjson::Writer<string_output_stream>, rapidjson::PrettyWriter<string_output_stream>>;
-
-void jsonIntFunc(tr_variant const& /*var*/, int64_t const val, void* vdata)
+[[nodiscard]] auto sorted_entries(tr_variant::Map const& map)
 {
-    std::visit([val](auto&& writer) { writer.Int64(val); }, *static_cast<writer_var_t*>(vdata));
-}
-
-void jsonBoolFunc(tr_variant const& /*var*/, bool const val, void* vdata)
-{
-    std::visit([val](auto&& writer) { writer.Bool(val); }, *static_cast<writer_var_t*>(vdata));
-}
-
-void jsonRealFunc(tr_variant const& /*var*/, double const val, void* vdata)
-{
-    std::visit([val](auto&& writer) { writer.Double(val); }, *static_cast<writer_var_t*>(vdata));
-}
-
-void jsonStringFunc(tr_variant const& /*var*/, std::string_view sv, void* vdata)
-{
-    std::visit([sv](auto&& writer) { writer.String(std::data(sv), std::size(sv)); }, *static_cast<writer_var_t*>(vdata));
-}
-
-void jsonDictBeginFunc(tr_variant const& /*var*/, void* vdata)
-{
-    std::visit([](auto&& writer) { writer.StartObject(); }, *static_cast<writer_var_t*>(vdata));
-}
-
-void jsonListBeginFunc(tr_variant const& /*var*/, void* vdata)
-{
-    std::visit([](auto&& writer) { writer.StartArray(); }, *static_cast<writer_var_t*>(vdata));
-}
-
-void jsonContainerEndFunc(tr_variant const& var, void* vdata)
-{
-    auto& writer_var = *static_cast<writer_var_t*>(vdata);
-
-    if (var.holds_alternative<tr_variant::Map>())
+    static auto constexpr N = 32U;
+    auto entries = small::vector<std::pair<std::string_view, tr_variant const*>, N>{};
+    entries.reserve(map.size());
+    for (auto const& [key, child] : map)
     {
-        std::visit([](auto&& writer) { writer.EndObject(); }, writer_var);
+        entries.emplace_back(tr_quark_get_string_view(key), &child);
     }
-    else /* list */
-    {
-        std::visit([](auto&& writer) { writer.EndArray(); }, writer_var);
-    }
+    std::sort(std::begin(entries), std::end(entries));
+    return entries;
 }
+
+template<typename WriterT>
+struct JsonWriter
+{
+    WriterT& writer;
+
+    void operator()(std::monostate /*unused*/) const
+    {
+    }
+
+    void operator()(std::nullptr_t) const
+    {
+        writer.Null();
+    }
+
+    void operator()(bool const val) const
+    {
+        writer.Bool(val);
+    }
+
+    void operator()(int64_t const val) const
+    {
+        writer.Int64(val);
+    }
+
+    void operator()(double const val) const
+    {
+        writer.Double(val);
+    }
+
+    void operator()(std::string_view const val) const
+    {
+        // workaround for this issue: in Writer::String() at
+        // rapidjson/writer.h:205: `RAPIDJSON_ASSERT(str != 0);`
+        // that fails when val.data() is nullptr when val.empty()
+        char const* data = std::data(val);
+        writer.String(data != nullptr ? data : "", std::size(val));
+    }
+
+    void operator()(tr_variant::Vector const& val) const
+    {
+        writer.StartArray();
+        for (auto const& child : val)
+        {
+            child.visit(*this);
+        }
+        writer.EndArray();
+    }
+
+    void operator()(tr_variant::Map const& val) const
+    {
+        writer.StartObject();
+        for (auto const& [key, child] : sorted_entries(val))
+        {
+            writer.Key(std::data(key), std::size(key));
+            child->visit(*this);
+        }
+        writer.EndObject();
+    }
+};
+
+template<typename WriterT>
+JsonWriter(WriterT&) -> JsonWriter<WriterT>;
 
 } // namespace to_string_helpers
 } // namespace
@@ -357,29 +377,18 @@ std::string tr_variant_serde::to_json_string(tr_variant const& var) const
 {
     using namespace to_string_helpers;
 
-    static auto constexpr Funcs = WalkFuncs{
-        jsonIntFunc, //
-        jsonBoolFunc, //
-        jsonRealFunc, //
-        jsonStringFunc, //
-        jsonDictBeginFunc, //
-        jsonListBeginFunc, //
-        jsonContainerEndFunc, //
-    };
-
-    auto out = std::string{};
-    out.reserve(rapidjson::StringBuffer::kDefaultCapacity);
-    auto stream = string_output_stream{ out };
-    auto writer = writer_var_t{};
+    auto buf = FmtOutputStream{};
     if (compact_)
     {
-        writer.emplace<0>(stream);
+        auto writer = rapidjson::Writer{ buf };
+        var.visit(JsonWriter{ writer });
     }
     else
     {
-        writer.emplace<1>(stream);
+        // Explicitly specify template parameter to workaround
+        // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=85790
+        auto writer = rapidjson::PrettyWriter<FmtOutputStream>{ buf };
+        var.visit(JsonWriter{ writer });
     }
-    walk(var, Funcs, &writer, true);
-
-    return out;
+    return buf.to_string();
 }

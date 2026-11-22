@@ -12,7 +12,7 @@
 #include <string>
 #include <string_view>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <fmt/xchar.h> // for wchar_t support
 
 #include <windows.h>
@@ -29,7 +29,7 @@ using namespace std::literals;
 namespace
 {
 
-enum class tr_app_type
+enum class tr_app_type : uint8_t
 {
     EXE,
     BATCH
@@ -52,26 +52,34 @@ void set_system_error(tr_error* error, DWORD code, std::string_view what)
     }
 }
 
+constexpr bool to_bool(BOOL value) noexcept
+{
+    return value != FALSE;
+}
+
 // "The sort is case-insensitive, Unicode order, without regard to locale" © MSDN
 class WStrICompare
 {
 public:
-    [[nodiscard]] auto compare(std::wstring_view a, std::wstring_view b) const noexcept // <=>
+    [[nodiscard]] static auto compare(std::wstring_view a, std::wstring_view b) noexcept // <=>
     {
         int diff = wcsnicmp(std::data(a), std::data(b), std::min(std::size(a), std::size(b)));
 
         if (diff == 0)
         {
-            diff = std::size(a) < std::size(b) ? -1 : (std::size(a) > std::size(b) ? 1 : 0);
+            diff = tr_compare_3way(std::size(a), std::size(b));
         }
 
         return diff;
     }
 
+    // Suppress STL-instantiation noise from MSVC xutility noexcept(bool(...)).
+    // NOLINTBEGIN(readability-redundant-casting)
     [[nodiscard]] auto operator()(std::wstring_view a, std::wstring_view b) const noexcept // <
     {
         return compare(a, b) < 0;
     }
+    // NOLINTEND(readability-redundant-casting)
 };
 
 using SortedWideEnv = std::map<std::wstring, std::wstring, WStrICompare>;
@@ -177,6 +185,9 @@ void append_argument(std::string& arguments, char const* argument)
 
         case '"':
             backslash_count = backslash_count * 2 + 1;
+            break;
+
+        default:
             break;
         }
 
@@ -298,7 +309,7 @@ bool tr_spawn_async(
 
     PROCESS_INFORMATION pi;
 
-    bool const ret = CreateProcessW(
+    bool const ret = to_bool(CreateProcessW(
         nullptr,
         std::data(cmd_line),
         nullptr,
@@ -308,7 +319,7 @@ bool tr_spawn_async(
         std::empty(full_env) ? nullptr : to_env_string(full_env).data(),
         std::empty(current_dir) ? nullptr : current_dir.c_str(),
         &si,
-        &pi);
+        &pi));
 
     if (ret)
     {

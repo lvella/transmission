@@ -41,7 +41,7 @@
 #include <gtkmm/treemodelsort.h>
 #endif
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <array>
@@ -57,14 +57,17 @@
 #include <utility>
 
 using namespace std::literals;
+using namespace transmission::app;
 
 class Session::Impl
 {
 public:
     Impl(Session& core, tr_session* session);
+    Impl& operator=(Impl&&) = delete;
+    Impl& operator=(Impl const&) = delete;
+    Impl(Impl&&) = delete;
+    Impl(Impl const&) = delete;
     ~Impl();
-
-    TR_DISABLE_COPY_MOVE(Impl)
 
     tr_session* close();
 
@@ -80,6 +83,7 @@ public:
     void set_port_test_pending(bool pending, PortTestIpProtocol ip_protocol);
 
     void update();
+    void update_torrent(tr_torrent_id_t id);
     void torrents_added();
 
     void add_files(std::vector<Glib::RefPtr<Gio::File>> const& files, bool do_start, bool do_prompt, bool do_notify);
@@ -87,7 +91,9 @@ public:
     void add_torrent(Glib::RefPtr<Torrent> const& torrent, bool do_notify);
     bool add_from_url(Glib::ustring const& url);
 
-    void send_rpc_request(tr_variant const& request, int64_t tag, std::function<void(tr_variant&)> const& response_func);
+    void remove_torrent(tr_torrent_id_t id, bool delete_files);
+
+    void send_rpc_request(tr_quark method, tr_variant const& params, std::function<void(tr_variant&)> on_response);
 
     void commit_prefs_change(tr_quark key);
 
@@ -139,7 +145,7 @@ private:
     void inc_busy();
     void dec_busy();
 
-    bool add_file(Glib::RefPtr<Gio::File> const& file, bool do_start, bool do_prompt, bool do_notify);
+    bool add(Glib::ustring const& name_in, bool do_start, bool do_prompt, bool do_notify);
     void add_file_async_callback(
         Glib::RefPtr<Gio::File> const& file,
         Glib::RefPtr<Gio::AsyncResult>& result,
@@ -312,12 +318,13 @@ void rename_torrent(Glib::RefPtr<Gio::File> const& file)
     }
     catch (Glib::Error const& e)
     {
-        gtr_message(fmt::format(
-            _("Couldn't rename '{old_path}' as '{path}': {error} ({error_code})"),
-            fmt::arg("old_path", old_name),
-            fmt::arg("path", new_name),
-            fmt::arg("error", e.what()),
-            fmt::arg("error_code", e.code())));
+        gtr_message(
+            fmt::format(
+                fmt::runtime(_("Couldn't rename '{old_path}' as '{path}': {error} ({error_code})")),
+                fmt::arg("old_path", old_name),
+                fmt::arg("path", new_name),
+                fmt::arg("error", e.what()),
+                fmt::arg("error_code", e.code())));
     }
 }
 
@@ -470,7 +477,10 @@ void Session::Impl::on_pref_changed(tr_quark const key)
     switch (key)
     {
     case TR_KEY_sort_mode:
-        sorter_->set_mode(gtr_pref_string_get(TR_KEY_sort_mode));
+        if (auto const sort_mode = gtr_pref_get<SortMode>(TR_KEY_sort_mode))
+        {
+            sorter_->set_mode(*sort_mode);
+        }
         break;
 
     case TR_KEY_sort_reversed:
@@ -618,7 +628,14 @@ std::pair<Glib::RefPtr<Torrent>, guint> Session::Impl::find_torrent_by_id(tr_tor
             return { torrent, position };
         }
 
-        (current_torrent_id < torrent_id ? begin_position : end_position) = position;
+        if (current_torrent_id < torrent_id)
+        {
+            begin_position = position + 1;
+        }
+        else
+        {
+            end_position = position;
+        }
     }
 
     return {};
@@ -631,12 +648,7 @@ void Session::Impl::on_torrent_metadata_changed(tr_torrent* raw_torrent)
     Glib::signal_idle().connect(
         [this, core = get_core_ptr(), torrent_id = tr_torrentId(raw_torrent)]()
         {
-            /* update the torrent's collated name */
-            if (auto const& [torrent, position] = find_torrent_by_id(torrent_id); torrent)
-            {
-                torrent->update();
-            }
-
+            update_torrent(torrent_id);
             return false;
         });
 }
@@ -761,6 +773,10 @@ void Session::add_ctor(tr_ctor* ctor)
     bool const do_prompt = gtr_pref_flag_get(TR_KEY_show_options_window);
     core_apply_defaults(ctor);
     impl_->add_ctor(ctor, do_prompt, do_notify);
+
+    // This is a batch of one, so end it here.
+    // Otherwise what add_ctor() reported, usually a duplicate, never reaches the user.
+    torrents_added();
 }
 
 /***
@@ -781,7 +797,7 @@ void Session::Impl::add_file_async_callback(
 
         if (!file->load_contents_finish(result, contents, length))
         {
-            gtr_message(fmt::format(_("Couldn't read '{path}'"), fmt::arg("path", file->get_parse_name())));
+            gtr_message(fmt::format(fmt::runtime(_("Couldn't read '{path}'")), fmt::arg("path", file->get_parse_name())));
         }
         else if (tr_ctorSetMetainfo(ctor, contents, length, nullptr))
         {
@@ -794,18 +810,34 @@ void Session::Impl::add_file_async_callback(
     }
     catch (Glib::Error const& e)
     {
-        gtr_message(fmt::format(
-            _("Couldn't read '{path}': {error} ({error_code})"),
-            fmt::arg("path", file->get_parse_name()),
-            fmt::arg("error", e.what()),
-            fmt::arg("error_code", e.code())));
+        gtr_message(
+            fmt::format(
+                fmt::runtime(_("Couldn't read '{path}': {error} ({error_code})")),
+                fmt::arg("path", file->get_parse_name()),
+                fmt::arg("error", e.what()),
+                fmt::arg("error_code", e.code())));
     }
+
+    // add_from_url() returned, and ended its batch, long before this download finished.
+    // This late arrival needs a batch end of its own.
+    torrents_added();
 
     dec_busy();
 }
 
-bool Session::Impl::add_file(Glib::RefPtr<Gio::File> const& file, bool do_start, bool do_prompt, bool do_notify)
+// Add `name,` which might be a local filename, a magnet link, or a URI.
+bool Session::Impl::add(Glib::ustring const& name_in, bool const do_start, bool const do_prompt, bool const do_notify)
 {
+    auto name = name_in;
+
+    // `gio::File` doesn't seem to know how to stringify magnet links correctly.
+    // Unfortunately there are some code paths that unavoidably use `gio::File`
+    // e.g. Gtk::Application::on_open() so we have to do this:
+    if (auto constexpr BrokenMagnetLinkPrefix = "magnet:///?"sv; tr_strv_starts_with(name.raw(), BrokenMagnetLinkPrefix))
+    {
+        name.replace(0, std::size(BrokenMagnetLinkPrefix), "magnet:?");
+    }
+
     auto* const session = get_session();
     if (session == nullptr)
     {
@@ -818,6 +850,7 @@ bool Session::Impl::add_file(Glib::RefPtr<Gio::File> const& file, bool do_start,
     tr_ctorSetPaused(ctor, TR_FORCE, !do_start);
 
     bool loaded = false;
+    auto file = Gio::File::create_for_parse_name(name);
     if (auto const path = file->get_path(); !std::empty(path))
     {
         // try to treat it as a file...
@@ -827,7 +860,7 @@ bool Session::Impl::add_file(Glib::RefPtr<Gio::File> const& file, bool do_start,
     if (!loaded)
     {
         // try to treat it as a magnet link...
-        loaded = tr_ctorSetMetainfoFromMagnetLink(ctor, file->get_uri().c_str(), nullptr);
+        loaded = tr_ctorSetMetainfoFromMagnetLink(ctor, name.raw().c_str(), nullptr);
     }
 
     // if we could make sense of it, add it
@@ -846,7 +879,10 @@ bool Session::Impl::add_file(Glib::RefPtr<Gio::File> const& file, bool do_start,
     else
     {
         tr_ctorFree(ctor);
-        std::cerr << fmt::format(_("Couldn't add torrent file '{path}'"), fmt::arg("path", file->get_parse_name())) << '\n';
+        std::cerr << fmt::format(
+                         fmt::runtime(_("Couldn't add torrent file '{path}'")),
+                         fmt::arg("path", file->get_parse_name()))
+                  << '\n';
     }
 
     return handled;
@@ -859,12 +895,11 @@ bool Session::add_from_url(Glib::ustring const& url)
 
 bool Session::Impl::add_from_url(Glib::ustring const& url)
 {
-    auto const file = Gio::File::create_for_uri(url);
     auto const do_start = gtr_pref_flag_get(TR_KEY_start_added_torrents);
     auto const do_prompt = gtr_pref_flag_get(TR_KEY_show_options_window);
     auto const do_notify = false;
 
-    auto const handled = add_file(file, do_start, do_prompt, do_notify);
+    auto const handled = add(url, do_start, do_prompt, do_notify);
     torrents_added();
     return handled;
 }
@@ -878,7 +913,7 @@ void Session::Impl::add_files(std::vector<Glib::RefPtr<Gio::File>> const& files,
 {
     for (auto const& file : files)
     {
-        add_file(file, do_start, do_prompt, do_notify);
+        add(file->get_parse_name(), do_start, do_prompt, do_notify);
     }
 
     torrents_added();
@@ -895,22 +930,22 @@ void Session::Impl::torrents_added()
     signal_add_error_.emit(ERR_NO_MORE_TORRENTS, {});
 }
 
-void Session::torrent_changed(tr_torrent_id_t id)
+void Session::torrent_changed(tr_torrent_id_t const id)
 {
-    if (auto const& [torrent, position] = impl_->find_torrent_by_id(id); torrent)
-    {
-        torrent->update();
-    }
+    impl_->update_torrent(id);
 }
 
 void Session::remove_torrent(tr_torrent_id_t id, bool delete_files)
 {
-    if (auto const& [torrent, position] = impl_->find_torrent_by_id(id); torrent)
-    {
-        /* remove from the gui */
-        impl_->get_raw_model()->remove(position);
+    impl_->remove_torrent(id, delete_files);
+}
 
-        /* remove the torrent */
+void Session::Impl::remove_torrent(tr_torrent_id_t id, bool delete_files)
+{
+    if (auto const& [torrent, position] = find_torrent_by_id(id); torrent)
+    {
+        get_raw_model()->remove(position);
+
         tr_torrentRemove(
             &torrent->get_underlying(),
             delete_files,
@@ -962,16 +997,11 @@ void Session::update()
     impl_->update();
 }
 
-void Session::start_now(tr_torrent_id_t id)
+void Session::start_now(tr_torrent_id_t const id)
 {
-    tr_variant top;
-    tr_variantInitDict(&top, 2);
-    tr_variantDictAddStrView(&top, TR_KEY_method, "torrent-start-now");
-
-    auto* args = tr_variantDictAddDict(&top, TR_KEY_arguments, 1);
-    auto* ids = tr_variantDictAddList(args, TR_KEY_ids, 1);
-    tr_variantListAddInt(ids, id);
-    exec(top);
+    auto params = tr_variant::Map{ 1U };
+    params.try_emplace(TR_KEY_ids, to_variant({ id }));
+    exec(TR_KEY_torrent_start_now, std::move(params));
 }
 
 void Session::Impl::update()
@@ -996,6 +1026,17 @@ void Session::Impl::update()
     if (changes.any())
     {
         signal_torrents_changed_.emit(torrent_ids, changes);
+    }
+}
+
+void Session::Impl::update_torrent(tr_torrent_id_t const id)
+{
+    if (auto const& [torrent, position] = find_torrent_by_id(id); torrent)
+    {
+        if (auto const changes = torrent->update(); changes.any())
+        {
+            signal_torrents_changed_.emit({ id }, changes);
+        }
     }
 }
 
@@ -1026,12 +1067,13 @@ bool gtr_inhibit_hibernation(guint32& cookie)
             std::string(SessionManagerObjectPath),
             std::string(SessionManagerInterface),
             "Inhibit",
-            Glib::VariantContainerBase::create_tuple({
-                Glib::Variant<Glib::ustring>::create(application),
-                Glib::Variant<guint32>::create(toplevel_xid),
-                Glib::Variant<Glib::ustring>::create(reason),
-                Glib::Variant<guint32>::create(flags),
-            }),
+            Glib::VariantContainerBase::create_tuple(
+                {
+                    Glib::Variant<Glib::ustring>::create(application),
+                    Glib::Variant<guint32>::create(toplevel_xid),
+                    Glib::Variant<Glib::ustring>::create(reason),
+                    Glib::Variant<guint32>::create(flags),
+                }),
             std::string(SessionManagerServiceName),
             1000);
 
@@ -1044,7 +1086,8 @@ bool gtr_inhibit_hibernation(guint32& cookie)
     }
     catch (Glib::Error const& e)
     {
-        tr_logAddError(fmt::format(_("Couldn't inhibit desktop hibernation: {error}"), fmt::arg("error", e.what())));
+        tr_logAddError(
+            fmt::format(fmt::runtime(_("Couldn't inhibit desktop hibernation: {error}")), fmt::arg("error", e.what())));
     }
 
     return success;
@@ -1069,7 +1112,8 @@ void gtr_uninhibit_hibernation(guint inhibit_cookie)
     }
     catch (Glib::Error const& e)
     {
-        tr_logAddError(fmt::format(_("Couldn't inhibit desktop hibernation: {error}"), fmt::arg("error", e.what())));
+        tr_logAddError(
+            fmt::format(fmt::runtime(_("Couldn't inhibit desktop hibernation: {error}")), fmt::arg("error", e.what())));
     }
 }
 
@@ -1159,31 +1203,34 @@ void Session::set_pref(tr_quark const key, double newval)
 ****
 ***/
 
-/* #define DEBUG_RPC */
-
 namespace
 {
 
-int64_t nextTag = 1;
+int64_t nextId = 1;
+
+bool const verbose_ = tr_env_key_exists("TR_RPC_VERBOSE");
 
 std::map<int64_t, std::function<void(tr_variant&)>> pendingRequests;
 
 bool core_read_rpc_response_idle(tr_variant& response)
 {
-    if (int64_t tag = 0; tr_variantDictFindInt(&response, TR_KEY_tag, &tag))
+    if (verbose_)
     {
-        if (auto const data_it = pendingRequests.find(tag); data_it != pendingRequests.end())
-        {
-            if (auto const& response_func = data_it->second; response_func)
-            {
-                response_func(response);
-            }
+        fmt::print("{:s}:{:d} got response:\n{:s}\n", __FILE__, __LINE__, tr_variant_serde::json().to_string(response));
+    }
 
-            pendingRequests.erase(data_it);
-        }
-        else
+    if (auto const* resmap = response.get_if<tr_variant::Map>())
+    {
+        if (auto const id = resmap->value_if<int64_t>(TR_KEY_id))
         {
-            gtr_warning(fmt::format(_("Couldn't find pending RPC request for tag {tag}"), fmt::arg("tag", tag)));
+            if (auto const nh = pendingRequests.extract(*id))
+            {
+                nh.mapped()(response);
+            }
+            else
+            {
+                gtr_warning(fmt::format(fmt::runtime(_("Couldn't find pending RPC request for id {id}")), fmt::arg("id", *id)));
+            }
         }
     }
 
@@ -1199,26 +1246,45 @@ void core_read_rpc_response(tr_session* /*session*/, tr_variant&& response)
 } // namespace
 
 void Session::Impl::send_rpc_request(
-    tr_variant const& request,
-    int64_t tag,
-    std::function<void(tr_variant&)> const& response_func)
+    tr_quark const method,
+    tr_variant const& params,
+    std::function<void(tr_variant&)> on_response)
 {
     if (session_ == nullptr)
     {
         gtr_error("GTK+ client doesn't support connections to remote servers yet.");
+        return;
     }
-    else
+
+    // build the jsonrpc request
+    auto reqmap = tr_variant::Map{ 4U };
+    reqmap.try_emplace(TR_KEY_jsonrpc, tr_variant::unmanaged_string(JsonRpc::Version));
+    reqmap.try_emplace(TR_KEY_method, tr_variant::unmanaged_string(method));
+
+    // add params if there are any
+    if (params.has_value())
     {
-        /* remember this request */
-        pendingRequests.try_emplace(tag, response_func);
-
-        /* make the request */
-#ifdef DEBUG_RPC
-        gtr_message(fmt::format("request: [{}]", tr_variantToStr(request, TR_VARIANT_FMT_JSON_LEAN)));
-#endif
-
-        tr_rpc_request_exec(session_, request, core_read_rpc_response);
+        reqmap.try_emplace(TR_KEY_params, params.clone());
     }
+
+    // add id if we want a response
+    auto callback = std::function<void(tr_session*, tr_variant&&)>{};
+    if (on_response)
+    {
+        auto const id = nextId++;
+        pendingRequests.try_emplace(id, std::move(on_response));
+        reqmap.try_emplace(TR_KEY_id, id);
+        callback = core_read_rpc_response;
+    }
+
+    auto req = tr_variant{ std::move(reqmap) };
+
+    if (verbose_)
+    {
+        fmt::print("{:s}:{:d} sending req:\n{:s}\n", __FILE__, __LINE__, tr_variant_serde::json().to_string(req));
+    }
+
+    tr_rpc_request_exec(session_, req, std::move(callback));
 }
 
 /***
@@ -1235,36 +1301,30 @@ void Session::port_test(PortTestIpProtocol const ip_protocol)
     }
     impl_->set_port_test_pending(true, ip_protocol);
 
-    auto const tag = nextTag++;
-
-    auto arguments_map = tr_variant::Map{ 1U };
-    arguments_map.try_emplace(TR_KEY_ipProtocol, tr_variant::unmanaged_string(IpStr[ip_protocol]));
-
-    auto request_map = tr_variant::Map{ 3U };
-    request_map.try_emplace(TR_KEY_method, tr_variant::unmanaged_string("port-test"sv));
-    request_map.try_emplace(TR_KEY_tag, tag);
-    request_map.try_emplace(TR_KEY_arguments, std::move(arguments_map));
+    auto params = tr_variant::Map{ 1U };
+    params.try_emplace(TR_KEY_ip_protocol, tr_variant::unmanaged_string(IpStr[ip_protocol]));
 
     impl_->send_rpc_request(
-        tr_variant{ std::move(request_map) },
-        tag,
+        TR_KEY_port_test,
+        std::move(params),
         [this, ip_protocol](tr_variant& response)
         {
             impl_->set_port_test_pending(false, ip_protocol);
 
-            auto status = std::optional<bool>{};
-            if (tr_variant* args = nullptr; tr_variantDictFindDict(&response, TR_KEY_arguments, &args))
+            auto is_open = std::optional<bool>();
+
+            if (auto const* resmap = response.get_if<tr_variant::Map>())
             {
-                if (auto result = bool{}; tr_variantDictFindBool(args, TR_KEY_port_is_open, &result))
+                if (auto const* result = resmap->find_if<tr_variant::Map>(TR_KEY_result))
                 {
-                    status = result;
+                    is_open = result->value_if<bool>(TR_KEY_port_is_open);
                 }
             }
 
             // If for whatever reason the status optional is empty here,
             // then something must have gone wrong with the port test,
             // so the UI should show the "error" state
-            impl_->signal_port_tested().emit(status, ip_protocol);
+            impl_->signal_port_tested().emit(is_open, ip_protocol);
         });
 }
 
@@ -1292,46 +1352,35 @@ void Session::Impl::set_port_test_pending(bool pending, Session::PortTestIpProto
 
 void Session::blocklist_update()
 {
-    auto const tag = nextTag;
-    ++nextTag;
-
-    tr_variant request;
-    tr_variantInitDict(&request, 2);
-    tr_variantDictAddStrView(&request, TR_KEY_method, "blocklist-update");
-    tr_variantDictAddInt(&request, TR_KEY_tag, tag);
     impl_->send_rpc_request(
-        request,
-        tag,
-        [this](auto& response)
+        TR_KEY_blocklist_update,
+        tr_variant{}, // no params
+        [this](tr_variant& response)
         {
-            tr_variant* args = nullptr;
-            int64_t ruleCount = 0;
+            std::optional<int64_t> n_rules;
 
-            if (!tr_variantDictFindDict(&response, TR_KEY_arguments, &args) ||
-                !tr_variantDictFindInt(args, TR_KEY_blocklist_size, &ruleCount))
+            if (auto const* resmap = response.get_if<tr_variant::Map>())
             {
-                ruleCount = -1;
+                if (auto const* result = resmap->find_if<tr_variant::Map>(TR_KEY_result))
+                {
+                    n_rules = result->value_if<int64_t>(TR_KEY_blocklist_size);
+                }
             }
 
-            if (ruleCount > 0)
+            if (n_rules.has_value())
             {
                 gtr_pref_int_set(TR_KEY_blocklist_date, tr_time());
             }
 
-            impl_->signal_blocklist_updated().emit(ruleCount >= 0);
+            impl_->signal_blocklist_updated().emit(n_rules >= 0);
         });
 }
 
-/***
-****
-***/
+// ---
 
-void Session::exec(tr_variant const& request)
+void Session::exec(tr_quark method, tr_variant const& params)
 {
-    auto const tag = nextTag;
-    ++nextTag;
-
-    impl_->send_rpc_request(request, tag, {});
+    impl_->send_rpc_request(method, params, {});
 }
 
 /***
@@ -1386,12 +1435,19 @@ void Session::open_folder(tr_torrent_id_t torrent_id) const
 
     if (tor != nullptr)
     {
-        bool const single = tr_torrentFileCount(tor) == 1;
         char const* currentDir = tr_torrentGetCurrentDir(tor);
 
-        if (single)
+        if (tr_torrentFileCount(tor) == 1)
         {
-            gtr_open_file(currentDir);
+            auto const subpath = std::string_view{ tr_torrentFile(tor, 0).name };
+            if (auto const slash = subpath.find('/'); slash != std::string_view::npos)
+            {
+                gtr_open_file(Glib::build_filename(currentDir, std::string{ subpath.substr(0, slash) }));
+            }
+            else
+            {
+                gtr_open_file(currentDir);
+            }
         }
         else
         {

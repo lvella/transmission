@@ -9,7 +9,7 @@
 #include <string_view>
 #include <utility>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include "libtransmission/transmission.h"
 
@@ -46,7 +46,7 @@ bool preallocate_file_sparse(tr_sys_file_t fd, uint64_t length, tr_error* error)
 
     tr_logAddDebug(fmt::format("Fast preallocation failed: {} ({})", local_error.message(), local_error.code()));
 
-    if (!TR_ERROR_IS_ENOSPC(local_error.code()))
+    if (!tr_error_is_enospc(local_error.code()))
     {
         static char constexpr Zero = '\0';
 
@@ -86,7 +86,7 @@ bool preallocate_file_full(tr_sys_file_t fd, uint64_t length, tr_error* error)
 
     tr_logAddDebug(fmt::format("Full preallocation failed: {} ({})", local_error.message(), local_error.code()));
 
-    if (!TR_ERROR_IS_ENOSPC(local_error.code()))
+    if (!tr_error_is_enospc(local_error.code()))
     {
         auto buf = std::array<uint8_t, 4096>{};
         bool success = true;
@@ -166,11 +166,12 @@ std::optional<tr_sys_file_t> tr_open_files::get(
         dir.popdir();
         if (!tr_sys_dir_create(dir, TR_SYS_DIR_CREATE_PARENTS, 0777, &error))
         {
-            tr_logAddError(fmt::format(
-                _("Couldn't create '{path}': {error} ({error_code})"),
-                fmt::arg("path", dir),
-                fmt::arg("error", error.message()),
-                fmt::arg("error_code", error.code())));
+            tr_logAddError(
+                fmt::format(
+                    fmt::runtime(_("Couldn't create '{path}': {error} ({error_code})")),
+                    fmt::arg("path", dir),
+                    fmt::arg("error", error.message()),
+                    fmt::arg("error_code", error.code())));
             return {};
         }
     }
@@ -184,15 +185,16 @@ std::optional<tr_sys_file_t> tr_open_files::get(
 
     // open the file
     int flags = writable ? (TR_SYS_FILE_WRITE | TR_SYS_FILE_CREATE) : 0;
-    flags |= TR_SYS_FILE_READ | TR_SYS_FILE_SEQUENTIAL;
+    flags |= TR_SYS_FILE_READ;
     auto const fd = tr_sys_file_open(filename, flags, 0666, &error);
     if (!is_open(fd))
     {
-        tr_logAddError(fmt::format(
-            _("Couldn't open '{path}': {error} ({error_code})"),
-            fmt::arg("path", filename),
-            fmt::arg("error", error.message()),
-            fmt::arg("error_code", error.code())));
+        tr_logAddError(
+            fmt::format(
+                fmt::runtime(_("Couldn't open '{path}': {error} ({error_code})")),
+                fmt::arg("path", filename),
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
         return {};
     }
 
@@ -216,11 +218,12 @@ std::optional<tr_sys_file_t> tr_open_files::get(
 
         if (!success)
         {
-            tr_logAddError(fmt::format(
-                _("Couldn't preallocate '{path}': {error} ({error_code})"),
-                fmt::arg("path", filename),
-                fmt::arg("error", error.message()),
-                fmt::arg("error_code", error.code())));
+            tr_logAddError(
+                fmt::format(
+                    fmt::runtime(_("Couldn't preallocate '{path}': {error} ({error_code})")),
+                    fmt::arg("path", filename),
+                    fmt::arg("error", error.message()),
+                    fmt::arg("error_code", error.code())));
             tr_sys_file_close(fd);
             return {};
         }
@@ -235,11 +238,12 @@ std::optional<tr_sys_file_t> tr_open_files::get(
     // https://bugs.launchpad.net/ubuntu/+source/transmission/+bug/318249
     if (resize_needed && !tr_sys_file_truncate(fd, file_size, &error))
     {
-        tr_logAddWarn(fmt::format(
-            _("Couldn't truncate '{path}': {error} ({error_code})"),
-            fmt::arg("path", filename),
-            fmt::arg("error", error.message()),
-            fmt::arg("error_code", error.code())));
+        tr_logAddWarn(
+            fmt::format(
+                fmt::runtime(_("Couldn't truncate '{path}': {error} ({error_code})")),
+                fmt::arg("path", filename),
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
         tr_sys_file_close(fd);
         return {};
     }

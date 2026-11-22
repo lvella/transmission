@@ -9,7 +9,6 @@
 #include <cstdint> // int64_t
 #include <map>
 #include <optional>
-#include <set>
 #include <string_view>
 #include <vector>
 
@@ -20,7 +19,6 @@
 
 #include <libtransmission/transmission.h>
 #include <libtransmission/quark.h>
-#include <libtransmission/tr-macros.h>
 
 #include "RpcClient.h"
 #include "RpcQueue.h"
@@ -38,10 +36,13 @@ extern "C"
 class Session : public QObject
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(Session)
 
 public:
     Session(QString config_dir, Prefs& prefs);
+    Session(Session&&) = delete;
+    Session(Session const&) = delete;
+    Session& operator=(Session&&) = delete;
+    Session& operator=(Session const&) = delete;
     ~Session() override;
 
     void stop();
@@ -99,7 +100,6 @@ public:
     }
 
     RpcResponseFuture exec(tr_quark method, tr_variant* args);
-    RpcResponseFuture exec(std::string_view method, tr_variant* args);
 
     using Tag = RpcQueue::Tag;
     Tag torrentSet(torrent_ids_t const& torrent_ids, tr_quark const key, bool val);
@@ -134,26 +134,6 @@ public:
         Rename
     };
 
-    void addKeyName(TorrentProperties props, tr_quark const key)
-    {
-        // populate names cache with default values
-        if (names_[props].empty())
-        {
-            getKeyNames(props);
-        }
-
-        names_[props].emplace(tr_quark_get_string_view(key));
-    }
-
-    void removeKeyName(TorrentProperties props, tr_quark const key)
-    {
-        // do not remove id because it must be in every torrent req
-        if (key != TR_KEY_id)
-        {
-            names_[props].erase(tr_quark_get_string_view(key));
-        }
-    }
-
 public slots:
     void addTorrent(AddData add_me);
     void launchWebInterface() const;
@@ -168,6 +148,11 @@ public slots:
 
 signals:
     void sourceChanged();
+
+    // The session found its config dir held by another and started nothing.
+    // Emitted from every path that reaches start(), so a handler need not know which one ran.
+    void configDirContended();
+
     void portTested(std::optional<bool> status, PortTestIpProtocol ip_protocol);
     void statsUpdated();
     void sessionUpdated();
@@ -192,18 +177,16 @@ private:
     Tag torrentSetImpl(tr_variant* args);
     void sessionSet(tr_quark const key, QVariant const& value);
     void pumpRequests();
-    void sendTorrentRequest(std::string_view request, torrent_ids_t const& torrent_ids);
+    void sendTorrentRequest(tr_quark method, torrent_ids_t const& torrent_ids);
     void refreshTorrents(torrent_ids_t const& ids, TorrentProperties props);
-    std::set<std::string_view> const& getKeyNames(TorrentProperties props);
 
     static void updateStats(tr_variant* args_dict, tr_session_stats* stats);
 
+    void addOptionalIds(tr_variant::Map& params, torrent_ids_t const& torrent_ids) const;
     void addOptionalIds(tr_variant* args_dict, torrent_ids_t const& torrent_ids) const;
 
     QString const config_dir_;
     Prefs& prefs_;
-
-    std::map<TorrentProperties, std::set<std::string_view>> names_;
 
     int64_t blocklist_size_ = -1;
     std::array<bool, NUM_PORT_TEST_IP_PROTOCOL> port_test_pending_ = {};

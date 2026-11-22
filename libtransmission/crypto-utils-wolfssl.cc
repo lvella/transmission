@@ -3,7 +3,6 @@
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
 
-#include <memory>
 #include <mutex>
 
 #include <wolfssl/options.h>
@@ -13,7 +12,7 @@
 #include <wolfssl/wolfcrypt/sha256.h>
 #include <wolfssl/version.h>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include "libtransmission/transmission.h"
 
@@ -46,7 +45,7 @@ void log_wolfssl_error(int error_code, char const* file, int line)
             line,
             TR_LOG_ERROR,
             fmt::format(
-                _("{crypto_library} error: {error} ({error_code})"),
+                fmt::runtime(_("{crypto_library} error: {error} ({error_code})")),
                 fmt::arg("crypto_library", "WolfSSL"),
                 fmt::arg("error", wc_GetErrorString(error_code)),
                 fmt::arg("error_code", error_code)));

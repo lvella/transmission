@@ -40,7 +40,7 @@
 #include <gtkmm/eventcontrollerfocus.h>
 #endif
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include <array>
 #include <limits>
@@ -61,9 +61,11 @@ class PrefsDialog::Impl
 {
 public:
     Impl(PrefsDialog& dialog, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core);
+    Impl(Impl&&) = delete;
+    Impl(Impl const&) = delete;
+    Impl& operator=(Impl&&) = delete;
+    Impl& operator=(Impl const&) = delete;
     ~Impl() = default;
-
-    TR_DISABLE_COPY_MOVE(Impl)
 
 private:
     void response_cb(int response);
@@ -97,9 +99,11 @@ class PageBase : public Gtk::Box
 {
 public:
     PageBase(BaseObjectType* cast_item, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core);
+    PageBase(PageBase&&) = delete;
+    PageBase(PageBase const&) = delete;
+    PageBase& operator=(PageBase&&) = delete;
+    PageBase& operator=(PageBase const&) = delete;
     ~PageBase() override;
-
-    TR_DISABLE_COPY_MOVE(PageBase)
 
     Gtk::CheckButton* init_check_button(Glib::ustring const& name, tr_quark key);
     Gtk::SpinButton* init_spin_button(Glib::ustring const& name, tr_quark key, int low, int high, int step);
@@ -126,7 +130,7 @@ public:
     template<typename T, typename... ArgTs>
     static void localize_label(T& widget, ArgTs&&... args)
     {
-        widget.set_label(fmt::format(widget.get_label().raw(), std::forward<ArgTs>(args)...));
+        widget.set_label(fmt::format(fmt::runtime(widget.get_label().raw()), std::forward<ArgTs>(args)...));
     }
 
 private:
@@ -311,7 +315,8 @@ Gtk::ComboBox* PageBase::init_encryption_combo(Glib::ustring const& name, tr_qua
             { _("Prefer encryption"), TR_ENCRYPTION_PREFERRED },
             { _("Require encryption"), TR_ENCRYPTION_REQUIRED },
         });
-    gtr_combo_box_set_active_enum(*combo, gtr_pref_int_get(key));
+    auto const mode = gtr_pref_get<tr_encryption_mode>(key).value_or(TR_ENCRYPTION_PREFERRED);
+    gtr_combo_box_set_active_enum(*combo, static_cast<int>(mode));
     combo->signal_changed().connect([this, combo, key]() { onIntComboChanged(*combo, key); });
     return combo;
 }
@@ -399,9 +404,11 @@ class DownloadingPage : public PageBase
 {
 public:
     DownloadingPage(BaseObjectType* cast_item, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core);
+    DownloadingPage(DownloadingPage&&) = delete;
+    DownloadingPage(DownloadingPage const&) = delete;
+    DownloadingPage& operator=(DownloadingPage&&) = delete;
+    DownloadingPage& operator=(DownloadingPage const&) = delete;
     ~DownloadingPage() override;
-
-    TR_DISABLE_COPY_MOVE(DownloadingPage)
 
 private:
     void on_core_prefs_changed(tr_quark key);
@@ -463,9 +470,11 @@ class SeedingPage : public PageBase
 {
 public:
     SeedingPage(BaseObjectType* cast_item, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core);
+    SeedingPage(SeedingPage&&) = delete;
+    SeedingPage(SeedingPage const&) = delete;
+    SeedingPage& operator=(SeedingPage&&) = delete;
+    SeedingPage& operator=(SeedingPage const&) = delete;
     ~SeedingPage() override = default;
-
-    TR_DISABLE_COPY_MOVE(SeedingPage)
 };
 
 SeedingPage::SeedingPage(
@@ -490,9 +499,11 @@ class DesktopPage : public PageBase
 {
 public:
     DesktopPage(BaseObjectType* cast_item, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core);
+    DesktopPage(DesktopPage&&) = delete;
+    DesktopPage(DesktopPage const&) = delete;
+    DesktopPage& operator=(DesktopPage&&) = delete;
+    DesktopPage& operator=(DesktopPage const&) = delete;
     ~DesktopPage() override = default;
-
-    TR_DISABLE_COPY_MOVE(DesktopPage)
 };
 
 DesktopPage::DesktopPage(
@@ -527,9 +538,11 @@ class PrivacyPage : public PageBase
 
 public:
     PrivacyPage(BaseObjectType* cast_item, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core);
+    PrivacyPage(PrivacyPage&&) = delete;
+    PrivacyPage(PrivacyPage const&) = delete;
+    PrivacyPage& operator=(PrivacyPage&&) = delete;
+    PrivacyPage& operator=(PrivacyPage const&) = delete;
     ~PrivacyPage() override;
-
-    TR_DISABLE_COPY_MOVE(PrivacyPage)
 
 private:
     void updateBlocklistText();
@@ -552,7 +565,7 @@ void PrivacyPage::updateBlocklistText()
 {
     int const n = tr_blocklistGetRuleCount(core_->get_session());
     auto const msg = fmt::format(
-        ngettext("Blocklist has {count:L} entry", "Blocklist has {count:L} entries", n),
+        fmt::runtime(ngettext("Blocklist has {count:L} entry", "Blocklist has {count:L} entries", n)),
         fmt::arg("count", n));
     label_->set_text(msg);
 }
@@ -639,9 +652,11 @@ class RemotePage : public PageBase
 
 public:
     RemotePage(BaseObjectType* cast_item, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core);
+    RemotePage(RemotePage&&) = delete;
+    RemotePage(RemotePage const&) = delete;
+    RemotePage& operator=(RemotePage&&) = delete;
+    RemotePage& operator=(RemotePage const&) = delete;
     ~RemotePage() override = default;
-
-    TR_DISABLE_COPY_MOVE(RemotePage)
 
 private:
     void refreshWhitelist();
@@ -836,9 +851,11 @@ class SpeedPage : public PageBase
 {
 public:
     SpeedPage(BaseObjectType* cast_item, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core);
+    SpeedPage(SpeedPage&&) = delete;
+    SpeedPage(SpeedPage const&) = delete;
+    SpeedPage& operator=(SpeedPage&&) = delete;
+    SpeedPage& operator=(SpeedPage const&) = delete;
     ~SpeedPage() override = default;
-
-    TR_DISABLE_COPY_MOVE(SpeedPage)
 };
 
 SpeedPage::SpeedPage(BaseObjectType* cast_item, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core)
@@ -876,9 +893,11 @@ class NetworkPage : public PageBase
 {
 public:
     NetworkPage(BaseObjectType* cast_item, Glib::RefPtr<Gtk::Builder> const& builder, Glib::RefPtr<Session> const& core);
+    NetworkPage(NetworkPage&&) = delete;
+    NetworkPage(NetworkPage const&) = delete;
+    NetworkPage& operator=(NetworkPage&&) = delete;
+    NetworkPage& operator=(NetworkPage const&) = delete;
     ~NetworkPage() override;
-
-    TR_DISABLE_COPY_MOVE(NetworkPage)
 
 private:
     enum PortTestStatus : uint8_t
@@ -954,9 +973,9 @@ void NetworkPage::updatePortStatusText()
 
     portLabel_->set_markup(
         portTestStatus_[Session::PORT_TEST_IPV4] == portTestStatus_[Session::PORT_TEST_IPV6] ?
-            fmt::format(_("Status: <b>{status}</b>"), fmt::arg("status", status_ipv4)) :
+            fmt::format(fmt::runtime(_("Status: <b>{status}</b>")), fmt::arg("status", status_ipv4)) :
             fmt::format(
-                _("Status: <b>{status_ipv4}</b> (IPv4), <b>{status_ipv6}</b> (IPv6)"),
+                fmt::runtime(_("Status: <b>{status_ipv4}</b> (IPv4), <b>{status_ipv6}</b> (IPv6)")),
                 fmt::arg("status_ipv4", status_ipv4),
                 fmt::arg("status_ipv6", status_ipv6)));
 }
@@ -964,7 +983,7 @@ void NetworkPage::updatePortStatusText()
 void NetworkPage::portTestSetSensitive()
 {
     // Depend on the RPC call status instead of the UI status, so that the widgets
-    // won't be enabled even if the port peer port changed while we have port-test
+    // won't be enabled even if the port peer port changed while we have port_test
     // RPC call(s) in-flight.
     auto const sensitive = !core_->port_test_pending(Session::PORT_TEST_IPV4) &&
         !core_->port_test_pending(Session::PORT_TEST_IPV6);
@@ -989,7 +1008,7 @@ void NetworkPage::onPortTested(std::optional<bool> const result, Session::PortTe
 
     // Only update the UI if the current status is "checking", so that
     // we won't show the port test results for the old peer port if it
-    // changed while we have port-test RPC call(s) in-flight.
+    // changed while we have port_test RPC call(s) in-flight.
     if (auto& status = portTestStatus_[ip_protocol]; status == PORT_TEST_CHECKING)
     {
         status = ResultToStatus(result);

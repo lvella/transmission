@@ -11,8 +11,6 @@
 #include <string>
 #include <string_view>
 
-#include <event2/util.h> /* evutil_ascii_strcasecmp() */
-
 #ifndef _WIN32
 #include <unistd.h> /* getuid() */
 #include <sys/types.h> /* types needed by quota.h */
@@ -428,7 +426,7 @@ extern "C"
 
 #ifndef _WIN32
 
-    if (evutil_ascii_strcasecmp(info.fstype.c_str(), "xfs") == 0)
+    if (tr_strlower(info.fstype) == "xfs")
     {
 #ifdef HAVE_XQM
         ret = getxfsquota(info.device.c_str());
@@ -452,13 +450,13 @@ extern "C"
 
     if (auto const wide_path = tr_win32_utf8_to_native(path); !std::empty(wide_path))
     {
-        ULARGE_INTEGER freeBytesAvailable;
-        ULARGE_INTEGER totalBytesAvailable;
+        ULARGE_INTEGER free_bytes_available;
+        ULARGE_INTEGER total_bytes_available;
 
-        if (GetDiskFreeSpaceExW(wide_path.c_str(), &freeBytesAvailable, &totalBytesAvailable, nullptr))
+        if (GetDiskFreeSpaceExW(wide_path.c_str(), &free_bytes_available, &total_bytes_available, nullptr) != 0)
         {
-            ret.free = freeBytesAvailable.QuadPart;
-            ret.total = totalBytesAvailable.QuadPart;
+            ret.free = free_bytes_available.QuadPart;
+            ret.total = total_bytes_available.QuadPart;
         }
     }
 
@@ -520,7 +518,7 @@ std::optional<tr_sys_path_capacity> tr_sys_path_get_capacity(std::string_view pa
         error = &local_error;
     }
 
-    auto const info = tr_sys_path_get_info(path, 0, &local_error);
+    auto const info = tr_sys_path_get_info(path, 0, error);
     if (!info)
     {
         return {};

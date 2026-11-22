@@ -30,7 +30,10 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <libtransmission/transmission.h>
+
 #include "ColumnResizer.h"
+#include "CustomVariantType.h"
 #include "Formatter.h"
 #include "FreeSpaceLabel.h"
 #include "Prefs.h"
@@ -460,7 +463,7 @@ void PrefsDialog::updatePortStatusLabel()
 void PrefsDialog::portTestSetEnabled()
 {
     // Depend on the RPC call status instead of the UI status, so that the widgets
-    // won't be enabled even if the port peer port changed while we have port-test
+    // won't be enabled even if the port peer port changed while we have port_test
     // RPC call(s) in-flight.
     auto const sensitive = !session_.portTestPending(Session::PORT_TEST_IPV4) &&
         !session_.portTestPending(Session::PORT_TEST_IPV6);
@@ -485,7 +488,7 @@ void PrefsDialog::onPortTested(std::optional<bool> result, Session::PortTestIpPr
 
     // Only update the UI if the current status is "checking", so that
     // we won't show the port test results for the old peer port if it
-    // changed while we have port-test RPC call(s) in-flight.
+    // changed while we have port_test RPC call(s) in-flight.
     if (port_test_status_[ip_protocol] == PORT_TEST_CHECKING)
     {
         port_test_status_[ip_protocol] = StatusFromResult(result);
@@ -569,15 +572,14 @@ void PrefsDialog::onUpdateBlocklistClicked()
 
 void PrefsDialog::encryptionEdited(int i)
 {
-    int const value(qobject_cast<QComboBox*>(sender())->itemData(i).toInt());
-    setPref(Prefs::ENCRYPTION, value);
+    setPref(Prefs::ENCRYPTION, qobject_cast<QComboBox*>(sender())->itemData(i));
 }
 
 void PrefsDialog::initPrivacyTab()
 {
-    ui_.encryptionModeCombo->addItem(tr("Allow encryption"), 0);
-    ui_.encryptionModeCombo->addItem(tr("Prefer encryption"), 1);
-    ui_.encryptionModeCombo->addItem(tr("Require encryption"), 2);
+    ui_.encryptionModeCombo->addItem(tr("Allow encryption"), TR_CLEAR_PREFERRED);
+    ui_.encryptionModeCombo->addItem(tr("Prefer encryption"), TR_ENCRYPTION_PREFERRED);
+    ui_.encryptionModeCombo->addItem(tr("Require encryption"), TR_ENCRYPTION_REQUIRED);
 
     linkWidgetToPref(ui_.encryptionModeCombo, Prefs::ENCRYPTION);
     linkWidgetToPref(ui_.blocklistCheck, Prefs::BLOCKLIST_ENABLED);
@@ -867,7 +869,7 @@ void PrefsDialog::refreshPref(int key)
         if (!updateWidgetValue(w, key) && (key == Prefs::ENCRYPTION))
         {
             auto* combo_box = qobject_cast<QComboBox*>(w);
-            int const index = combo_box->findData(prefs_.getInt(key));
+            int const index = combo_box->findData(prefs_.get<tr_encryption_mode>(key));
             combo_box->setCurrentIndex(index);
         }
 

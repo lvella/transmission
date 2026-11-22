@@ -24,7 +24,12 @@
 #include "Torrent.h"
 #include "Utils.h"
 
+#include <libtransmission-app/interop.h>
+#include <libtransmission-app/startup-coordinator.h>
+
 #include <libtransmission/transmission.h>
+#include <libtransmission/api-compat.h>
+#include <libtransmission/crypto-utils.h> // tr_base64_decode()
 #include <libtransmission/log.h>
 #include <libtransmission/quark.h>
 #include <libtransmission/rpcimpl.h>
@@ -63,7 +68,7 @@
 #include <gtkmm/selectiondata.h>
 #endif
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <csignal>
@@ -72,8 +77,10 @@
 #include <iterator> // std::back_inserter
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -101,7 +108,7 @@ namespace
 auto const AppIconName = "transmission"sv; // TODO(C++20): Use ""s
 
 char const* const LICENSE =
-    "Copyright 2005-2024. All code is copyrighted by the respective authors.\n"
+    "Copyright 2005-2026. All code is copyrighted by the respective authors.\n"
     "\n"
     "Transmission can be redistributed and/or modified under the terms of the "
     "GNU GPL, versions 2 or 3, or by any future license endorsed by Mnemosyne LLC."
@@ -120,15 +127,36 @@ char const* const LICENSE =
 class Application::Impl
 {
 public:
-    Impl(Application& app, std::string const& config_dir, bool start_paused, bool start_iconified);
+    Impl(
+        Application& app,
+        std::string config_dir,
+        bool const start_paused,
+        bool const start_iconified,
+        std::unique_ptr<tr::interop::StartupCoordinator> startup_coordinator)
+        : app_{ app }
+        , config_dir_{ std::move(config_dir) }
+        , start_paused_{ start_paused }
+        , start_iconified_{ start_iconified }
+        , startup_coordinator_{ std::move(startup_coordinator) }
+    {
+    }
+
+    Impl(Impl&&) = delete;
+    Impl(Impl const&) = delete;
+    Impl& operator=(Impl&&) = delete;
+    Impl& operator=(Impl const&) = delete;
     ~Impl() = default;
 
-    TR_DISABLE_COPY_MOVE(Impl)
-
     void open_files(std::vector<Glib::RefPtr<Gio::File>> const& files);
+    [[nodiscard]] bool add_wire_metainfo(std::string_view metainfo);
 
     void on_startup();
     void on_activate();
+
+    [[nodiscard]] constexpr bool configDirIsContended() const noexcept
+    {
+        return config_dir_contended_;
+    }
 
     void actions_handler(Glib::ustring const& action_name);
 
@@ -138,6 +166,25 @@ private:
         int total_count = 0;
         int queued_count = 0;
         int stopped_count = 0;
+    };
+
+    // Every method here is one call into something Impl already does.
+    // Decisions belong in tr::interop::StartupCoordinator, not here.
+    class LocalInstance final : public tr::interop::Instance
+    {
+    public:
+        explicit LocalInstance(Impl& impl) noexcept
+            : impl_{ impl }
+        {
+        }
+
+        [[nodiscard]] tr::interop::Reply present_window(std::string_view activation_token) override;
+        [[nodiscard]] tr::interop::Reply add_metainfo(std::string_view metainfo) override;
+        [[nodiscard]] std::string config_dir() override;
+        [[nodiscard]] std::string description() const override;
+
+    private:
+        Impl& impl_;
     };
 
 private:
@@ -165,7 +212,7 @@ private:
     bool on_rpc_changed_idle(tr_rpc_callback_type type, tr_torrent_id_t torrent_id);
 
     void placeWindowFromPrefs();
-    void presentMainWindow();
+    void presentMainWindow(Glib::ustring const& activation_token = {});
     void hideMainWindow();
     void toggleMainWindow();
 
@@ -196,7 +243,7 @@ private:
     void start_all_torrents();
     void pause_all_torrents();
     void copy_magnet_link_to_clipboard(Glib::RefPtr<Torrent> const& torrent) const;
-    bool call_rpc_for_selected_torrents(std::string const& method);
+    bool call_rpc_for_selected_torrents(tr_quark method);
     void remove_selected(bool delete_files);
 
     static tr_rpc_callback_status on_rpc_changed(
@@ -213,6 +260,7 @@ private:
     bool const start_iconified_;
     bool is_iconified_ = false;
     bool is_closing_ = false;
+    bool config_dir_contended_ = false;
 
     Glib::RefPtr<Gtk::Builder> ui_builder_;
 
@@ -228,6 +276,9 @@ private:
     std::vector<std::string> error_list_;
     std::vector<std::string> duplicates_list_;
     std::map<std::string, std::unique_ptr<DetailsDialog>> details_;
+
+    LocalInstance interop_instance_{ *this };
+    std::unique_ptr<tr::interop::StartupCoordinator> const startup_coordinator_;
 };
 
 namespace
@@ -394,11 +445,12 @@ void register_magnet_link_handler()
     }
     catch (Gio::Error const& e)
     {
-        gtr_warning(fmt::format(
-            _("Couldn't register Transmission as a {content_type} handler: {error} ({error_code})"),
-            fmt::arg("content_type", content_type),
-            fmt::arg("error", e.what()),
-            fmt::arg("error_code", static_cast<int>(e.code()))));
+        gtr_warning(
+            fmt::format(
+                fmt::runtime(_("Couldn't register Transmission as a {content_type} handler: {error} ({error_code})")),
+                fmt::arg("content_type", content_type),
+                fmt::arg("error", e.what()),
+                fmt::arg("error_code", static_cast<int>(e.code()))));
     }
 }
 
@@ -610,7 +662,15 @@ void Application::Impl::on_startup()
     }
 
     /* initialize the libtransmission session */
-    session = tr_sessionInit(config_dir_.c_str(), true, gtr_pref_get_all());
+    session = tr_sessionInit(config_dir_, true, gtr_pref_get_all());
+
+    if (tr_sessionConfigDirIsContended(session))
+    {
+        config_dir_contended_ = true;
+        tr_sessionClose(session, 1);
+        app_.quit();
+        return;
+    }
 
     gtr_pref_flag_set(TR_KEY_alt_speed_enabled, tr_sessionUsesAltSpeed(session));
     gtr_pref_int_set(TR_KEY_peer_port, tr_sessionGetPeerPort(session));
@@ -659,6 +719,9 @@ void Application::Impl::on_startup()
 
     /* if there's no magnet link handler registered, register us */
     ensure_magnet_handler_exists();
+
+    // After the window exists, so present_window() has something to present.
+    startup_coordinator_->publish(interop_instance_);
 }
 
 void Application::on_activate()
@@ -670,6 +733,11 @@ void Application::on_activate()
 
 void Application::Impl::on_activate()
 {
+    if (config_dir_contended_)
+    {
+        return;
+    }
+
     activation_count_++;
 
     /* GApplication emits an 'activate' signal when bootstrapping the primary.
@@ -696,35 +764,27 @@ void Application::on_open(std::vector<Glib::RefPtr<Gio::File>> const& files, Gli
 {
     Gtk::Application::on_open(files, hint);
 
-    impl_->open_files(files);
+    if (!impl_->configDirIsContended())
+    {
+        impl_->open_files(files);
+    }
 }
 
-namespace
-{
-
-std::string get_application_id(std::string const& config_dir)
-{
-    struct stat sb = {};
-    (void)::stat(config_dir.c_str(), &sb);
-    return fmt::format("com.transmissionbt.transmission_{}_{}", sb.st_dev, sb.st_ino);
-}
-
-} // namespace
-
-Application::Application(std::string const& config_dir, bool start_paused, bool start_iconified)
-    : Gtk::Application(get_application_id(config_dir), TR_GIO_APPLICATION_FLAGS(HANDLES_OPEN))
-    , impl_(std::make_unique<Impl>(*this, config_dir, start_paused, start_iconified))
+Application::Application(
+    std::string const& config_dir,
+    bool const start_paused,
+    bool const start_iconified,
+    std::unique_ptr<tr::interop::StartupCoordinator> startup_coordinator)
+    : Gtk::Application{ TR_GTK_APP_ID, TR_GIO_APPLICATION_FLAGS(HANDLES_OPEN) | TR_GIO_APPLICATION_FLAGS(NON_UNIQUE) }
+    , impl_{ std::make_unique<Impl>(*this, config_dir, start_paused, start_iconified, std::move(startup_coordinator)) }
 {
 }
 
 Application::~Application() = default;
 
-Application::Impl::Impl(Application& app, std::string const& config_dir, bool start_paused, bool start_iconified)
-    : app_(app)
-    , config_dir_(config_dir)
-    , start_paused_(start_paused)
-    , start_iconified_(start_iconified)
+bool Application::configDirIsContended() const noexcept
 {
+    return impl_->configDirIsContended();
 }
 
 void Application::Impl::on_core_busy(bool busy)
@@ -774,36 +834,6 @@ void Application::Impl::app_setup()
         gtr_window_set_skip_taskbar_hint(*wind_, icon_ != nullptr);
         gtr_action_set_toggled("toggle-main-window", false);
     }
-
-    if (!gtr_pref_flag_get(TR_KEY_user_has_given_informed_consent))
-    {
-        auto w = std::make_shared<Gtk::MessageDialog>(
-            *wind_,
-            _("Transmission is a file sharing program. When you run a torrent, its data will be "
-              "made available to others by means of upload. Any content you share is your sole responsibility."),
-            false,
-            TR_GTK_MESSAGE_TYPE(OTHER),
-            TR_GTK_BUTTONS_TYPE(NONE),
-            true);
-        w->add_button(_("_Cancel"), TR_GTK_RESPONSE_TYPE(REJECT));
-        w->add_button(_("I _Agree"), TR_GTK_RESPONSE_TYPE(ACCEPT));
-        w->set_default_response(TR_GTK_RESPONSE_TYPE(ACCEPT));
-        w->signal_response().connect(
-            [w](int response) mutable
-            {
-                if (response == TR_GTK_RESPONSE_TYPE(ACCEPT))
-                {
-                    // only show it once
-                    gtr_pref_flag_set(TR_KEY_user_has_given_informed_consent, true);
-                    w.reset();
-                }
-                else
-                {
-                    exit(0);
-                }
-            });
-        w->show();
-    }
 }
 
 void Application::Impl::placeWindowFromPrefs()
@@ -816,8 +846,16 @@ void Application::Impl::placeWindowFromPrefs()
 #endif
 }
 
-void Application::Impl::presentMainWindow()
+void Application::Impl::presentMainWindow(Glib::ustring const& activation_token)
 {
+    if (!activation_token.empty())
+    {
+        // GTK spends the token when it presents: startup-notification id on X11,
+        // xdg-activation token on Wayland. Without one the compositor may leave the
+        // window unfocused.
+        wind_->set_startup_id(activation_token);
+    }
+
     gtr_action_set_toggled("toggle-main-window", true);
 
     if (is_iconified_)
@@ -1301,7 +1339,7 @@ void Application::Impl::on_prefs_changed(tr_quark const key)
         {
             bool const b = gtr_pref_flag_get(key);
             tr_sessionUseAltSpeed(tr, b);
-            gtr_action_set_toggled(std::string(tr_quark_get_string_view(key)), b);
+            gtr_action_set_toggled("alt-speed-enabled", b);
             break;
         }
 
@@ -1355,6 +1393,10 @@ void Application::Impl::on_prefs_changed(tr_quark const key)
 
     case TR_KEY_trash_original_torrent_files:
         tr_sessionSetDeleteSource(tr, gtr_pref_flag_get(key));
+        break;
+
+    case TR_KEY_torrent_complete_verify_enabled:
+        tr_sessionSetCompleteVerifyEnabled(tr, gtr_pref_flag_get(key));
         break;
 
     default:
@@ -1439,25 +1481,18 @@ void Application::Impl::show_about_dialog()
     d->show();
 }
 
-bool Application::Impl::call_rpc_for_selected_torrents(std::string const& method)
+bool Application::Impl::call_rpc_for_selected_torrents(tr_quark const method)
 {
-    tr_variant top;
-    bool invoked = false;
-    auto* session = core_->get_session();
-
-    tr_variantInitDict(&top, 2);
-    tr_variantDictAddStrView(&top, TR_KEY_method, method);
-    auto* const args = tr_variantDictAddDict(&top, TR_KEY_arguments, 1);
-    auto* const ids = tr_variantDictAddList(args, TR_KEY_ids, 0);
-    wind_->for_each_selected_torrent([ids](auto const& torrent) { tr_variantListAddInt(ids, torrent->get_id()); });
-
-    if (tr_variantListSize(ids) != 0)
+    auto const ids = get_selected_torrent_ids();
+    if (std::empty(ids))
     {
-        tr_rpc_request_exec(session, top, {});
-        invoked = true;
+        return false;
     }
 
-    return invoked;
+    auto params = tr_variant::Map{ 1U };
+    params.try_emplace(TR_KEY_ids, Session::to_variant(ids));
+    core_->exec(method, std::move(params));
+    return true;
 }
 
 void Application::Impl::remove_selected(bool delete_files)
@@ -1470,22 +1505,12 @@ void Application::Impl::remove_selected(bool delete_files)
 
 void Application::Impl::start_all_torrents()
 {
-    auto* session = core_->get_session();
-    tr_variant request;
-
-    tr_variantInitDict(&request, 1);
-    tr_variantDictAddStrView(&request, TR_KEY_method, "torrent-start"sv);
-    tr_rpc_request_exec(session, request, {});
+    core_->exec(TR_KEY_torrent_start, {});
 }
 
 void Application::Impl::pause_all_torrents()
 {
-    auto* session = core_->get_session();
-    tr_variant request;
-
-    tr_variantInitDict(&request, 1);
-    tr_variantDictAddStrView(&request, TR_KEY_method, "torrent-stop"sv);
-    tr_rpc_request_exec(session, request, {});
+    core_->exec(TR_KEY_torrent_stop, {});
 }
 
 void Application::Impl::copy_magnet_link_to_clipboard(Glib::RefPtr<Torrent> const& torrent) const
@@ -1505,6 +1530,45 @@ void gtr_actions_handler(Glib::ustring const& action_name, gpointer user_data)
 {
     static_cast<Application::Impl*>(user_data)->actions_handler(action_name);
 }
+
+namespace
+{
+
+[[nodiscard]] std::optional<tr_quark> action_name_to_torrent_rpc_method(std::string_view const action_name)
+{
+    // action-name -> rpc_method
+    auto action_to_rpc = [](std::string_view const in)
+    {
+        auto out = std::string{ in };
+        std::transform(std::begin(out), std::end(out), std::begin(out), [](auto const ch) { return ch == '-' ? '_' : ch; });
+        return out;
+    };
+
+    if (auto quark = tr_quark_lookup(action_to_rpc(action_name)))
+    {
+        switch (*quark)
+        {
+        // supported methods
+        case TR_KEY_queue_move_bottom:
+        case TR_KEY_queue_move_down:
+        case TR_KEY_queue_move_top:
+        case TR_KEY_queue_move_up:
+        case TR_KEY_torrent_reannounce:
+        case TR_KEY_torrent_start:
+        case TR_KEY_torrent_start_now:
+        case TR_KEY_torrent_stop:
+        case TR_KEY_torrent_verify:
+            return quark;
+
+        default:
+            break;
+        }
+    }
+
+    return {};
+}
+
+} // namespace
 
 void Application::Impl::actions_handler(Glib::ustring const& action_name)
 {
@@ -1556,12 +1620,9 @@ void Application::Impl::actions_handler(Glib::ustring const& action_name)
             w->show();
         }
     }
-    else if (
-        action_name == "torrent-start" || action_name == "torrent-start-now" || action_name == "torrent-stop" ||
-        action_name == "torrent-reannounce" || action_name == "torrent-verify" || action_name == "queue-move-top" ||
-        action_name == "queue-move-up" || action_name == "queue-move-down" || action_name == "queue-move-bottom")
+    else if (auto const method = action_name_to_torrent_rpc_method(action_name.raw()))
     {
-        changed = call_rpc_for_selected_torrents(action_name);
+        changed = call_rpc_for_selected_torrents(*method);
     }
     else if (action_name == "open-torrent-folder")
     {
@@ -1646,11 +1707,74 @@ void Application::Impl::actions_handler(Glib::ustring const& action_name)
     }
     else
     {
-        gtr_error(fmt::format("Unhandled action: {}", action_name));
+        gtr_warning(fmt::format("Unhandled action: {}", action_name));
     }
 
     if (changed)
     {
         update_model_soon();
     }
+}
+
+tr::interop::Reply Application::Impl::LocalInstance::present_window(std::string_view const activation_token)
+{
+    // The transport answers until the main loop stops, which outlasts the window.
+    // A client on its way out has one only until its session has finished closing.
+    if (impl_.is_closing_)
+    {
+        return tr::interop::Reply::No;
+    }
+
+    impl_.presentMainWindow(Glib::ustring{ std::string{ activation_token } });
+    return tr::interop::Reply::Yes;
+}
+
+bool Application::Impl::add_wire_metainfo(std::string_view const metainfo)
+{
+    // Refuse rather than take a torrent into a session that is closing. The caller then
+    // keeps it and says so, and we never reach a core_ that the close has already freed.
+    if (is_closing_)
+    {
+        return false;
+    }
+
+    // The forms interop-names.h documents for AddMetainfo(s):
+    // a URL or magnet link as itself, or a torrent file's contents base64'd.
+    if (tr::interop::is_metainfo_link(metainfo))
+    {
+        return core_->add_from_url(std::string{ metainfo });
+    }
+
+    auto const contents = tr::interop::decode_metainfo_torrent(metainfo);
+    if (!contents)
+    {
+        return false;
+    }
+
+    auto* const ctor = tr_ctorNew(core_->get_session());
+    if (!tr_ctorSetMetainfo(ctor, std::data(*contents), std::size(*contents), nullptr))
+    {
+        tr_ctorFree(ctor);
+        return false;
+    }
+
+    core_->add_ctor(ctor);
+    return true;
+}
+
+tr::interop::Reply Application::Impl::LocalInstance::add_metainfo(std::string_view const metainfo)
+{
+    return impl_.add_wire_metainfo(metainfo) ? tr::interop::Reply::Yes : tr::interop::Reply::No;
+}
+
+std::string Application::Impl::LocalInstance::config_dir()
+{
+    // We canonicalize here rather than trust however this process was configured.
+    // interop.h requires a canonical answer from every implementation.
+    return tr::interop::canonical_config_dir(impl_.config_dir_);
+}
+
+std::string Application::Impl::LocalInstance::description() const
+{
+    return "this process";
 }

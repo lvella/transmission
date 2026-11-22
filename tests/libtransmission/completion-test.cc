@@ -16,9 +16,9 @@
 #include <libtransmission/crypto-utils.h> // for tr_rand_obj()
 #include <libtransmission/completion.h>
 
-#include "gtest/gtest.h"
+#include "test-fixtures.h"
 
-using CompletionTest = ::testing::Test;
+using CompletionTest = ::libtransmission::test::TransmissionTest;
 
 namespace
 {
@@ -280,7 +280,7 @@ TEST_F(CompletionTest, leftUntilDone)
     // check that dnd-flagging a piece we DON'T already have adjusts by block_info.pieceSize()
     torrent.dnd_pieces.insert(1);
     completion.invalidate_size_when_done();
-    EXPECT_EQ(block_info.total_size() - block_info.piece_size() * uint64_t{ 2U }, completion.left_until_done());
+    EXPECT_EQ(block_info.total_size() - (block_info.piece_size() * uint64_t{ 2U }), completion.left_until_done());
     torrent.dnd_pieces.clear();
     completion.invalidate_size_when_done();
 
@@ -300,7 +300,7 @@ TEST_F(CompletionTest, sizeWhenDone)
     auto constexpr PieceSize = uint64_t{ BlockSize * 64 };
     auto const block_info = tr_block_info{ TotalSize, PieceSize };
 
-    // check that adding or removing blocks or pieces does not affect sizeWhenDone
+    // check that adding or removing blocks or pieces does not affect size_when_done
     auto completion = torrent.makeCompletion(block_info);
     EXPECT_EQ(block_info.total_size(), completion.size_when_done());
     completion.add_block(0);
@@ -310,7 +310,7 @@ TEST_F(CompletionTest, sizeWhenDone)
     completion.remove_piece(0);
     EXPECT_EQ(block_info.total_size(), completion.size_when_done());
 
-    // check that flagging complete pieces as dnd does not affect sizeWhenDone
+    // check that flagging complete pieces as dnd does not affect size_when_done
     for (size_t i = 0; i < 32; ++i)
     {
         completion.add_piece(i);
@@ -319,13 +319,13 @@ TEST_F(CompletionTest, sizeWhenDone)
     completion.invalidate_size_when_done();
     EXPECT_EQ(block_info.total_size(), completion.size_when_done());
 
-    // check that flagging missing pieces as dnd does not affect sizeWhenDone
+    // check that flagging missing pieces as dnd does not affect size_when_done
     for (size_t i = 32; i < 48; ++i)
     {
         torrent.dnd_pieces.insert(i);
     }
     completion.invalidate_size_when_done();
-    EXPECT_EQ(block_info.total_size() - uint64_t{ 16U } * block_info.piece_size(), completion.size_when_done());
+    EXPECT_EQ(block_info.total_size() - (uint64_t{ 16U } * block_info.piece_size()), completion.size_when_done());
 }
 
 TEST_F(CompletionTest, createPieceBitfield)
@@ -458,19 +458,19 @@ TEST_F(CompletionTest, countHasBytesInSpan)
 
     // test span that has a middle block
     EXPECT_EQ(BlockSize * 3, completion.count_has_bytes_in_span({ 0, BlockSize * 3 }));
-    EXPECT_EQ(BlockSize * 2, completion.count_has_bytes_in_span({ BlockSize / 2, BlockSize * 2 + BlockSize / 2 }));
+    EXPECT_EQ(BlockSize * 2, completion.count_has_bytes_in_span({ BlockSize / 2, (BlockSize * 2) + (BlockSize / 2) }));
 
     // test span where first block is missing
     blocks.unset(0);
     completion.set_blocks(blocks);
     EXPECT_EQ(BlockSize * 2, completion.count_has_bytes_in_span({ 0, BlockSize * 3 }));
-    EXPECT_EQ(BlockSize * 1.5, completion.count_has_bytes_in_span({ BlockSize / 2, BlockSize * 2 + BlockSize / 2 }));
+    EXPECT_EQ(BlockSize * 1.5, completion.count_has_bytes_in_span({ BlockSize / 2, (BlockSize * 2) + (BlockSize / 2) }));
     // test span where final block is missing
     blocks.set_has_all();
     blocks.unset(2);
     completion.set_blocks(blocks);
     EXPECT_EQ(BlockSize * 2, completion.count_has_bytes_in_span({ 0, BlockSize * 3 }));
-    EXPECT_EQ(BlockSize * 1.5, completion.count_has_bytes_in_span({ BlockSize / 2, BlockSize * 2 + BlockSize / 2 }));
+    EXPECT_EQ(BlockSize * 1.5, completion.count_has_bytes_in_span({ BlockSize / 2, (BlockSize * 2) + (BlockSize / 2) }));
 }
 
 TEST_F(CompletionTest, wantNone)

@@ -49,7 +49,7 @@ public:
             std::begin(blocklists_),
             std::end(blocklists_),
             size_t{},
-            [](int sum, auto& cur) { return sum + std::size(cur); });
+            [](auto sum, auto& cur) { return sum + std::size(cur); });
     }
 
     void load(std::string_view folder, bool is_enabled);
@@ -78,7 +78,7 @@ private:
 
         [[nodiscard]] bool contains(tr_address const& addr) const;
 
-        [[nodiscard]] auto size() const
+        [[nodiscard]] size_t size() const
         {
             ensureLoaded();
 

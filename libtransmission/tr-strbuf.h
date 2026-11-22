@@ -9,7 +9,7 @@
 #include <string_view>
 #include <utility>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 /**
  * A memory buffer which uses a builtin array of N bytes, using heap
@@ -35,22 +35,31 @@ public:
 
     tr_strbuf(tr_strbuf const& other)
     {
-        assign(other.sv());
+        if (this != &other)
+        {
+            assign(other.sv());
+        }
     }
 
     tr_strbuf& operator=(tr_strbuf const& other)
     {
-        assign(other.sv());
+        if (this != &other)
+        {
+            assign(other.sv());
+        }
+
         return *this;
     }
 
-    tr_strbuf(tr_strbuf&& other)
+    tr_strbuf(tr_strbuf&& other) noexcept
         : buffer_{ std::move(other.buffer_) }
     {
         ensure_sz();
     }
 
-    tr_strbuf& operator=(tr_strbuf&& other)
+    ~tr_strbuf() = default;
+
+    tr_strbuf& operator=(tr_strbuf&& other) noexcept
     {
         buffer_ = std::move(other.buffer_);
         ensure_sz();
@@ -93,6 +102,16 @@ public:
         return buffer_[pos];
     }
 
+    [[nodiscard]] constexpr Char& operator[](size_t pos) noexcept
+    {
+        return buffer_[pos];
+    }
+
+    [[nodiscard]] constexpr Char operator[](size_t pos) const noexcept
+    {
+        return buffer_[pos];
+    }
+
     [[nodiscard]] constexpr auto size() const noexcept
     {
         return buffer_.size();
@@ -124,7 +143,7 @@ public:
     }
 
     template<typename ContiguousRange>
-    [[nodiscard]] constexpr auto operator==(ContiguousRange const& x) const noexcept
+    [[nodiscard]] constexpr bool operator==(ContiguousRange const& x) const noexcept
     {
         return sv() == x;
     }
@@ -242,31 +261,13 @@ public:
 
     ///
 
-    template<typename... Args>
-    void join(Char delim, Args const&... args)
-    {
-        ((append(args), append(delim)), ...);
-        resize(size() - 1);
-    }
-
-    template<typename ContiguousRange, typename... Args>
-    void join(ContiguousRange const& delim, Args const&... args)
-    {
-        ((append(args), append(delim)), ...);
-        resize(size() - std::size(delim));
-    }
-
-    template<typename... Args>
-    void join(Char const* sz_delim, Args const&... args)
-    {
-        join(std::basic_string_view<Char>{ sz_delim }, args...);
-    }
-
+    // NOLINTNEXTLINE(google-explicit-constructor)
     [[nodiscard]] constexpr operator std::basic_string_view<Char>() const noexcept
     {
         return sv();
     }
 
+    // NOLINTNEXTLINE(google-explicit-constructor)
     [[nodiscard]] constexpr operator auto() const noexcept
     {
         return c_str();
@@ -274,6 +275,7 @@ public:
 
     bool popdir() noexcept
     {
+        // NOLINTNEXTLINE(readability-redundant-declaration): P.S. This looks like some dark magic
         std::string_view tr_sys_path_dirname(std::string_view path);
         auto const parent = tr_sys_path_dirname(sv());
         auto const changed = parent != sv();

@@ -7,20 +7,29 @@
 
 #include <ctime>
 #include <memory>
-#include <unordered_set>
+#include <string>
+#include <string_view>
 
 #include <QApplication>
+#include <QPixmap>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QTimer>
 #include <QTranslator>
 #include <QWeakPointer>
 
-#include <libtransmission/tr-macros.h>
-#include <libtransmission/favicon-cache.h>
+#include <small/set.hpp>
+
+#include <libtransmission-app/favicon-cache.h>
+#include <libtransmission-app/interop.h>
 
 #include "AddData.h"
 #include "Typedefs.h"
-#include "Utils.h" // std::hash<QString>
+
+namespace tr::interop
+{
+class StartupCoordinator;
+}
 
 class AddData;
 class MainWindow;
@@ -33,18 +42,30 @@ class WatchDir;
 class Application : public QApplication
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(Application)
 
 public:
-    Application(int& argc, char** argv);
+    Application(
+        std::unique_ptr<Prefs> prefs,
+        std::unique_ptr<tr::interop::StartupCoordinator> startup_coordinator,
+        bool minimized,
+        QString const& config_dir,
+        QStringList const& filenames,
+        int& argc,
+        char** argv);
+    Application(Application&&) = delete;
+    Application(Application const&) = delete;
+    Application& operator=(Application&&) = delete;
+    Application& operator=(Application const&) = delete;
+    ~Application() override;
 
     void raise() const;
     bool notifyApp(QString const& title, QString const& body, QStringList const& actions = {}) const;
 
-    QString const& intern(QString const& in)
-    {
-        return *interned_strings_.insert(in).first;
-    }
+    // True when this launch found the config dir held by another session.
+    // We give way rather than write over the files that session owns.
+    [[nodiscard]] bool configDirIsContended() const noexcept;
+
+    QString intern(QString const& in);
 
     [[nodiscard]] QPixmap find_favicon(QString const& sitename) const
     {
@@ -76,12 +97,13 @@ public slots:
     void addWatchdirTorrent(QString const& filename) const;
 
 private slots:
-    void consentGiven(int result) const;
+    void onConfigDirContended();
     void onSessionSourceChanged() const;
     void onTorrentsAdded(torrent_ids_t const& torrent_ids) const;
     void onTorrentsCompleted(torrent_ids_t const& torrent_ids) const;
     void onTorrentsEdited(torrent_ids_t const& torrent_ids) const;
     void onTorrentsNeedInfo(torrent_ids_t const& torrent_ids) const;
+    void pruneInternedStrings();
     void refreshPref(int key) const;
     void refreshTorrents();
     void saveGeometry() const;
@@ -90,14 +112,31 @@ private slots:
 #endif
 
 private:
+    // Every method here is one call into something Application already does.
+    // Decisions belong in tr::interop::StartupCoordinator, not here.
+    class LocalInstance final : public tr::interop::Instance
+    {
+    public:
+        explicit LocalInstance(Application& app) noexcept
+            : app_{ app }
+        {
+        }
+
+        [[nodiscard]] tr::interop::Reply present_window(std::string_view activation_token) override;
+        [[nodiscard]] tr::interop::Reply add_metainfo(std::string_view metainfo) override;
+        [[nodiscard]] std::string config_dir() override;
+        [[nodiscard]] std::string description() const override;
+
+    private:
+        Application& app_;
+    };
+
     void maybeUpdateBlocklist() const;
     void loadTranslations();
-    void initUnits();
     QStringList getNames(torrent_ids_t const& ids) const;
-    void quitLater() const;
     void notifyTorrentAdded(Torrent const*) const;
 
-    std::unordered_set<QString> interned_strings_;
+    small::unordered_set<QString> interned_strings_;
 
     std::unique_ptr<Prefs> prefs_;
     std::unique_ptr<Session> session_;
@@ -107,22 +146,16 @@ private:
     QTimer model_timer_;
     QTimer stats_timer_;
     QTimer session_timer_;
+    QTimer intern_timer_;
     time_t last_full_update_time_ = {};
     QTranslator qt_translator_;
     QTranslator app_translator_;
 
-    FaviconCache<QPixmap> favicon_cache_;
+    transmission::app::FaviconCache<QPixmap> favicon_cache_;
 
-    QString const config_name_ = QStringLiteral("transmission");
-    QString const display_name_ = QStringLiteral("transmission-qt");
-
-#ifdef QT_DBUS_LIB
-    QString const fdo_notifications_service_name_ = QStringLiteral("org.freedesktop.Notifications");
-    QString const fdo_notifications_path_ = QStringLiteral("/org/freedesktop/Notifications");
-    QString const fdo_notifications_interface_name_ = QStringLiteral("org.freedesktop.Notifications");
-#endif
-
-    QRegularExpression const start_now_regex_{ QStringLiteral(R"rgx(start-now\((\d+)\))rgx") };
+    LocalInstance interop_instance_{ *this };
+    std::unique_ptr<tr::interop::StartupCoordinator> const startup_coordinator_;
+    bool config_dir_contended_ = false;
 };
 
 #define trApp dynamic_cast<Application*>(Application::instance())

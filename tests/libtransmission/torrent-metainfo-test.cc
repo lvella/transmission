@@ -51,7 +51,7 @@ TEST_F(TorrentMetainfoTest, magnetLink)
 #define BEFORE_PATH \
     "d10:created by25:Transmission/2.82 (14160)13:creation datei1402280218e8:encoding5:UTF-84:infod5:filesld6:lengthi2e4:pathl"
 #define AFTER_PATH \
-    "eed6:lengthi2e4:pathl5:b.txteee4:name3:foo12:piece lengthi32768e6:pieces20:ÞÉ`âMs¡Å;Ëº¬.åÂà7:privatei0eee"
+    "eed6:lengthi2e4:pathl5:b.txteee4:name3:foo12:piece lengthi32768e6:pieces20:aaaaaaaaaaaaaaaaaaaa7:privatei0eee"
 
 // FIXME: split these into parameterized tests?
 TEST_F(TorrentMetainfoTest, bucket)
@@ -62,7 +62,7 @@ TEST_F(TorrentMetainfoTest, bucket)
         bool expected_parse_result;
     };
 
-    auto const tests = std::array<LocalTest, 9>{ {
+    static auto constexpr Tests = std::array<LocalTest, 12U>{ {
         { BEFORE_PATH "5:a.txt" AFTER_PATH, true },
         // allow empty components, but not =all= empty components, see bug #5517
         { BEFORE_PATH "0:5:a.txt" AFTER_PATH, true },
@@ -75,16 +75,21 @@ TEST_F(TorrentMetainfoTest, bucket)
         // allow ".." components (replaced with "__")
         { BEFORE_PATH "2:..5:a.txt" AFTER_PATH, true },
         { BEFORE_PATH "5:a.txt2:.." AFTER_PATH, true },
+        // fail when coming across an invalid character
+        { "dhe", false },
+        { "d10:longer than 10 characterse", false },
+        // fail when string is too short
+        { "d10:short", false },
         // fail on empty string
         { "", false },
     } };
 
     tr_logSetLevel(TR_LOG_OFF);
 
-    for (auto const& test : tests)
+    for (auto const& [benc, expected_parse_result] : Tests)
     {
         auto metainfo = tr_torrent_metainfo{};
-        EXPECT_EQ(test.expected_parse_result, metainfo.parse_benc(test.benc));
+        EXPECT_EQ(expected_parse_result, metainfo.parse_benc(benc));
     }
 }
 
@@ -128,13 +133,12 @@ TEST_F(TorrentMetainfoTest, AndroidTorrent)
     EXPECT_NE(nullptr, metainfo);
     EXPECT_EQ(336, metainfo->info_dict_offset());
     EXPECT_EQ(26583, metainfo->info_dict_size());
-    EXPECT_EQ(592, metainfo->pieces_offset());
     tr_ctorFree(ctor);
 }
 
 TEST_F(TorrentMetainfoTest, ctorSaveContents)
 {
-    auto const sandbox = libtransmission::test::Sandbox::create_sandbox(::testing::TempDir(), "transmission-test-XXXXXX");
+    auto const sandbox = libtransmission::test::Sandbox::createSandbox(::testing::TempDir(), "transmission-test-XXXXXX");
     auto const src_filename = tr_pathbuf{ LIBTRANSMISSION_TEST_ASSETS_DIR, "/Android-x86 8.1 r6 iso.torrent"sv };
     auto const tgt_filename = tr_pathbuf{ sandbox, "save-contents-test.torrent" };
 
@@ -206,11 +210,62 @@ TEST_F(TorrentMetainfoTest, GetRightStyleWebseedString)
     EXPECT_EQ("http://www.webseed-one.com/"sv, tm.webseed(0));
 }
 
-// Test for https://github.com/transmission/transmission/issues/3591
-TEST_F(TorrentMetainfoTest, parseBencOOBWrite)
+TEST_F(TorrentMetainfoTest, piecesKeyTest)
 {
+    static auto constexpr BadTorrents = std::array<std::pair<std::string_view, std::string_view>, 7U>{ {
+        { "missing-pieces-key.torrent"sv, "missing v1 metadata"sv },
+        { "bad-pieces-key.torrent"sv, "missing v1 metadata"sv },
+        { "empty-pieces-key.torrent"sv, "missing v1 metadata"sv },
+        { "too-few-pieces.torrent"sv, "'pieces' and torrent size mismatch: 7, 6"sv },
+        { "too-many-pieces.torrent"sv, "'pieces' and torrent size mismatch: 5, 6"sv },
+        { "dup-pieces-key.torrent"sv, "invalid duplicate 'pieces'"sv },
+        { "invalid-pieces-length.torrent"sv,
+          "invalid 'pieces' size: 119"sv }, // Test for https://github.com/transmission/transmission/issues/3591
+    } };
+
+    {
+        auto tm = tr_torrent_metainfo{};
+        static auto constexpr Path = LIBTRANSMISSION_TEST_ASSETS_DIR "/perfect-pieces.torrent"sv;
+        EXPECT_TRUE(tm.parse_torrent_file(Path));
+    }
+
+    for (auto const& [name, errmsg] : BadTorrents)
+    {
+        auto error = tr_error{};
+        auto tm = tr_torrent_metainfo{};
+        auto const path = tr_pathbuf{ LIBTRANSMISSION_TEST_ASSETS_DIR, '/', name };
+        EXPECT_FALSE(tm.parse_torrent_file(path, nullptr, &error));
+        EXPECT_EQ(error.code(), EINVAL);
+        EXPECT_EQ(error.message(), errmsg);
+    }
+}
+
+TEST_F(TorrentMetainfoTest, pathKeyTest)
+{
+    static auto constexpr BadTorrents = std::array{ "dup-files.torrent"sv };
+
+    for (auto const& name : BadTorrents)
+    {
+        auto tm = tr_torrent_metainfo{};
+        auto const path = tr_pathbuf{ LIBTRANSMISSION_TEST_ASSETS_DIR, '/', name };
+        EXPECT_FALSE(tm.parse_torrent_file(path));
+    }
+}
+
+TEST_F(TorrentMetainfoTest, utf8Test)
+{
+// MacOS implementation uses non-deterministic conversion for illegal UTF-8
+#if (defined(__APPLE__) && defined(__clang__))
+    GTEST_SKIP();
+#endif
+    auto const src_filename = tr_pathbuf{ LIBTRANSMISSION_TEST_ASSETS_DIR "/bad-utf8-path.torrent"sv };
     auto tm = tr_torrent_metainfo{};
-    EXPECT_FALSE(tm.parse_benc(tr_base64_decode("ZGg0OmluZm9kNjpwaWVjZXMzOkFpzQ==")));
+    EXPECT_TRUE(tm.parse_torrent_file(src_filename));
+
+    // good name: bad-utf8-path/πfile.😀😀😀
+    EXPECT_EQ("bad-utf8-path/\u03C0file.\U0001F600\U0001F600\U0001F600", tm.file_subpath(0));
+    // bad name, gets masked to: bad-utf8-path/file�.foo
+    EXPECT_EQ("bad-utf8-path/file\uFFFD.foo", tm.file_subpath(1));
 }
 
 } // namespace libtransmission::test

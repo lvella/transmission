@@ -1,14 +1,13 @@
-cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.16.3 FATAL_ERROR)
 
-if(POLICY CMP0092)
-    cmake_policy(SET CMP0092 NEW)
-endif()
+cmake_policy(SET CMP0090 NEW)
+cmake_policy(SET CMP0092 NEW)
 if(POLICY CMP0114)
     cmake_policy(SET CMP0114 NEW)
 endif()
 
 # Value should follow latest stable Xcode's RECOMMENDED_MACOSX_DEPLOYMENT_TARGET
-set(MACOS_SUPPORT_MINIMUM 10.14.6)
+set(MACOS_SUPPORT_MINIMUM 12.0)
 
 # The value of this variable should be set prior to the first project() command invocation.
 # See: https://cmake.org/cmake/help/latest/variable/CMAKE_OSX_DEPLOYMENT_TARGET.html
@@ -51,10 +50,10 @@ set(GLIBMM_MINIMUM 2.60.0)
 set(GTKMM3_MINIMUM 3.24.0)
 set(GTKMM4_MINIMUM 4.11.1)
 set(OPENSSL_MINIMUM 1.1.0)
-set(MBEDTLS_MINIMUM 1.3)
-set(NPM_MINIMUM 8.1.307) # Node.js 14
+set(MBEDTLS_MINIMUM 2.7)
+set(NPM_MINIMUM 10.2.3) # Node.js 20.10 (eslint-plugin-unicorn)
 set(PSL_MINIMUM 0.21.1)
-set(QT_MINIMUM 5.6)
+set(QT_MINIMUM 5.15)
 
 option(ENABLE_DAEMON "Build daemon" ON)
 tr_auto_option(ENABLE_GTK "Build GTK client" AUTO)
@@ -70,8 +69,7 @@ option(ENABLE_WERROR "Treat warnings as errors" OFF)
 option(ENABLE_NLS "Enable native language support" ON)
 option(INSTALL_DOC "Build/install documentation" ON)
 option(INSTALL_LIB "Install the library" OFF)
-tr_auto_option(ENABLE_DEPRECATED "Allow deprecated API use of upstream packages, e.g. GTK" AUTO)
-tr_auto_option(RUN_CLANG_TIDY "Run clang-tidy on the code" OFF)
+tr_auto_option(RUN_CLANG_TIDY "Run clang-tidy on the code" AUTO)
 tr_auto_option(USE_SYSTEM_EVENT2 "Use system event2 library" AUTO)
 tr_auto_option(USE_SYSTEM_DEFLATE "Use system deflate library" AUTO)
 tr_auto_option(USE_SYSTEM_DHT "Use system dht library" AUTO)
@@ -96,9 +94,9 @@ set(TR_NAME ${PROJECT_NAME})
 # these should be the only five lines you need to change
 set(TR_VERSION_MAJOR "4")
 set(TR_VERSION_MINOR "1")
-set(TR_VERSION_PATCH "0")
+set(TR_VERSION_PATCH "4")
 set(TR_VERSION_BETA_NUMBER "") # empty string for not beta
-set(TR_VERSION_DEV TRUE)
+set(TR_VERSION_DEV FALSE)
 
 # derived from above: release type
 if(TR_VERSION_DEV)
@@ -169,10 +167,14 @@ set(TR_VCS_REVISION_FILE "${PROJECT_SOURCE_DIR}/REVISION")
 
 ## Compiler standard version
 
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_C_STANDARD)
+    set(CMAKE_C_STANDARD 11)
+    set(CMAKE_C_STANDARD_REQUIRED ON)
+endif()
+if(NOT CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+endif()
 
 if(EXISTS ${PROJECT_SOURCE_DIR}/.git)
     find_package(Git)
@@ -234,6 +236,8 @@ endif()
 
 set(CMAKE_FOLDER "${TR_THIRD_PARTY_DIR_NAME}")
 
+set(SOURCE_ICONS_DIR "${PROJECT_SOURCE_DIR}/icons")
+
 find_package(FastFloat)
 find_package(Fmt)
 find_package(RapidJSON)
@@ -245,14 +249,6 @@ find_package(Threads)
 find_package(PkgConfig QUIET)
 
 find_package(CURL ${CURL_MINIMUM} REQUIRED)
-
-if(ENABLE_DEPRECATED STREQUAL "AUTO")
-    if(DEFINED ENV{CI})
-        set(ENABLE_DEPRECATED OFF)
-    else()
-        set(ENABLE_DEPRECATED ON)
-    endif()
-endif()
 
 set(CRYPTO_PKG "")
 if(WITH_CRYPTO STREQUAL "AUTO" OR WITH_CRYPTO STREQUAL "ccrypto")
@@ -294,8 +290,7 @@ if(WITH_CRYPTO STREQUAL "AUTO" OR WITH_CRYPTO STREQUAL "mbedtls")
     tr_fixup_list_option(WITH_CRYPTO "mbedtls" MBEDTLS_FOUND "AUTO" MBEDTLS_IS_REQUIRED)
     if(WITH_CRYPTO STREQUAL "mbedtls")
         set(CRYPTO_PKG "mbedtls")
-        set(CRYPTO_INCLUDE_DIRS ${MBEDTLS_INCLUDE_DIRS})
-        set(CRYPTO_LIBRARIES ${MBEDTLS_LIBRARIES})
+        set(CRYPTO_LIBRARIES MbedTLS::mbedtls MbedTLS::mbedcrypto)
     endif()
 endif()
 
@@ -328,6 +323,7 @@ if(ENABLE_GTK)
             giomm-2.68>=${GIOMM_MINIMUM})
         set(GTK_VERSION 4)
         set(GTK_FOUND ${GTK4_FOUND})
+        set(GTKMM_MINIMUM ${GTKMM4_MINIMUM})
     endif()
 
     if(NOT GTK_FOUND AND (USE_GTK_VERSION STREQUAL "AUTO" OR USE_GTK_VERSION EQUAL 3))
@@ -337,6 +333,7 @@ if(ENABLE_GTK)
             giomm-2.4>=${GIOMM_MINIMUM})
         set(GTK_VERSION 3)
         set(GTK_FOUND ${GTK3_FOUND})
+        set(GTKMM_MINIMUM ${GTKMM3_MINIMUM})
     endif()
 
     if(GTK_IS_REQUIRED AND NOT GTK_FOUND)
@@ -363,7 +360,7 @@ if(GTK_FOUND)
         INTERFACE
             ${GTK${GTK_VERSION}_CFLAGS_OTHER})
 
-    target_include_directories(transmission::gtk_impl
+    target_include_directories(transmission::gtk_impl SYSTEM
         INTERFACE
             ${GTK${GTK_VERSION}_INCLUDE_DIRS})
 
@@ -374,6 +371,14 @@ if(GTK_FOUND)
     target_link_libraries(transmission::gtk_impl
         INTERFACE
             ${GTK${GTK_VERSION}_LIBRARIES})
+
+    if(GTKMM_MINIMUM MATCHES "^([0-9]+)\.([0-9]+)\.")
+        # GDK_VERSION_x_y is only defined for stable versions, i.e. even minor version numbers
+        math(EXPR GTKMM_MINIMUM_MINOR_STABLE "(${CMAKE_MATCH_2} + 1) / 2 * 2")
+        target_compile_definitions(transmission::gtk_impl
+            INTERFACE
+                GDK_VERSION_MIN_REQUIRED=GDK_VERSION_${CMAKE_MATCH_1}_${GTKMM_MINIMUM_MINOR_STABLE})
+    endif()
 endif()
 
 if(ENABLE_QT)
@@ -433,16 +438,14 @@ if(ENABLE_QT)
             endif()
         endforeach()
 
-        if(Qt${Qt_VERSION_MAJOR}AxContainer_FOUND AND Qt${Qt_VERSION_MAJOR}AxServer_FOUND)
+        if(WIN32 AND Qt${Qt_VERSION_MAJOR}AxContainer_FOUND AND Qt${Qt_VERSION_MAJOR}AxServer_FOUND)
             set(ENABLE_QT_COM_INTEROP ON)
 
             find_program(MIDL_EXECUTABLE midl)
             if(NOT MIDL_EXECUTABLE)
                 set(ENABLE_QT_COM_INTEROP OFF)
             endif()
-        endif()
-
-        if(Qt${Qt_VERSION_MAJOR}DBus_FOUND)
+        elseif(NOT WIN32 AND Qt${Qt_VERSION_MAJOR}DBus_FOUND)
             set(ENABLE_QT_DBUS_INTEROP ON)
         endif()
     endif()
@@ -503,7 +506,9 @@ tr_add_external_auto_library(EVENT2 libevent event
         -DEVENT__LIBRARY_TYPE:STRING=STATIC)
 
 tr_add_external_auto_library(NATPMP libnatpmp natpmp
-    TARGET natpmp::natpmp)
+    TARGET natpmp::natpmp
+    CMAKE_ARGS
+        -DBUILD_SHARED_LIBS=OFF)
 if(NOT USE_SYSTEM_NATPMP)
     target_compile_definitions(natpmp::natpmp
         INTERFACE
@@ -526,17 +531,10 @@ if(NOT USE_SYSTEM_MINIUPNPC)
     target_compile_definitions(miniupnpc::libminiupnpc
         INTERFACE
             MINIUPNP_STATICLIB)
-
-    set(MINIUPNPC_VERSION 2.2)
-    set(MINIUPNPC_API_VERSION 17)
 endif()
 unset(TR_MINIUPNPC_LIBNAME)
 
-target_compile_definitions(miniupnpc::libminiupnpc
-    INTERFACE
-        SYSTEM_MINIUPNP
-        $<$<VERSION_LESS:${MINIUPNPC_VERSION},1.7>:MINIUPNPC_API_VERSION=${MINIUPNPC_API_VERSION}>) # API version macro was only added in 1.7
-
+add_subdirectory(${TR_THIRD_PARTY_SOURCE_DIR}/madler-crcany)
 add_subdirectory(${TR_THIRD_PARTY_SOURCE_DIR}/wildmat)
 
 tr_add_external_auto_library(DHT dht dht
@@ -560,31 +558,40 @@ tr_add_external_auto_library(B64 libb64 b64
         -DLIBB64_SHARED:BOOL=OFF)
 
 set(TR_WEB_ASSETS ${PROJECT_SOURCE_DIR}/web/public_html)
-if(NOT ${REBUILD_WEB} STREQUAL "OFF")
-    find_program(NPM npm)
+if(REBUILD_WEB)
+    tr_get_required_flag(REBUILD_WEB NPM_IS_REQUIRED)
+
+    if(WIN32)
+        find_program(NPM npm.cmd)
+    else()
+        find_program(NPM npm)
+    endif()
+
     if ("${NPM}" STREQUAL "NPM-NOTFOUND")
-        if ("${REBUILD_WEB}" STREQUAL "ON")
+        set(NPM_FOUND OFF)
+        if(NPM_IS_REQUIRED)
             message(FATAL_ERROR "Could NOT find NPM, minimum required is \"${NPM_MINIMUM}\"")
-        else() # AUTO
-            set(REBUILD_WEB OFF)
         endif()
     else()
         execute_process(COMMAND "${NPM}" --version
             OUTPUT_STRIP_TRAILING_WHITESPACE
             OUTPUT_VARIABLE NPM_VERSION_STRING)
-        if ("${NPM_VERSION_STRING}" VERSION_GREATER_EQUAL "${NPM_MINIMUM}")
+        if("${NPM_VERSION_STRING}" VERSION_GREATER_EQUAL "${NPM_MINIMUM}")
             message(STATUS "Found NPM: ${NPM} (found suitable version \"${NPM_VERSION_STRING}\", minimum required is \"${NPM_MINIMUM}\")")
-            set(REBUILD_WEB ON)
-        elseif ("${REBUILD_WEB}" STREQUAL "ON")
+            set(NPM_FOUND ON)
+        elseif(NPM_IS_REQUIRED)
             message(FATAL_ERROR "Found NPM: ${NPM} Found unsuitable version \"${NPM_VERSION_STRING}\", but required is at least \"${NPM_MINIMUM}\"")
-        else() # AUTO
+        else()
             message(STATUS "Found NPM: ${NPM} Found unsuitable version \"${NPM_VERSION_STRING}\", but required is at least \"${NPM_MINIMUM}\"")
-            set(REBUILD_WEB OFF)
+            set(NPM_FOUND OFF)
         endif()
     endif()
-    if(REBUILD_WEB)
-      add_subdirectory(web)
-    endif()
+
+    tr_fixup_auto_option(REBUILD_WEB NPM_FOUND NPM_IS_REQUIRED)
+endif()
+
+if(REBUILD_WEB)
+    add_subdirectory(web)
 endif()
 
 if(WITH_INOTIFY)
@@ -648,6 +655,7 @@ else()
         -W
         -Wall
         -Wextra
+        -Warc-unsafe-retained-assign
         -Wcast-align
         -Wduplicated-cond
         -Wextra-semi
@@ -690,6 +698,12 @@ else()
         list(APPEND WARNING_CANDIDATES -Wno-format)
     else()
         list(APPEND WARNING_CANDIDATES -Wformat-security)
+    endif()
+
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 12.0)
+        # fix non-Transmission fmt+gcc
+        # https://github.com/fmtlib/fmt/commit/6870e4b06bbf0a0ddd98534a393a561261b3153c
+        list(REMOVE_ITEM WARNING_CANDIDATES -Wnull-dereference)
     endif()
 
     set(CMAKE_REQUIRED_FLAGS)
@@ -767,24 +781,29 @@ else()
     endif()
 endif()
 
-if(RUN_CLANG_TIDY STREQUAL "AUTO")
-    if(DEFINED ENV{LGTM_SRC} OR DEFINED ENV{APPVEYOR}) # skip clang-tidy on LGTM/appveyor
-        set(RUN_CLANG_TIDY OFF)
-    else()
-        set(RUN_CLANG_TIDY ON)
-    endif()
+if(RUN_CLANG_TIDY STREQUAL "AUTO" AND (DEFINED ENV{LGTM_SRC} OR DEFINED ENV{APPVEYOR})) # skip clang-tidy on LGTM/appveyor
+    set(RUN_CLANG_TIDY OFF)
 endif()
 
 if(RUN_CLANG_TIDY)
+    tr_get_required_flag(RUN_CLANG_TIDY CLANG_TIDY_IS_REQUIRED)
+
     message(STATUS "Looking for clang-tidy")
-    find_program(CLANG_TIDY clang-tidy)
+    find_program(CLANG_TIDY NAMES clang-tidy-20 clang-tidy)
     if(CLANG_TIDY STREQUAL "CLANG_TIDY-NOTFOUND")
         message(STATUS "Looking for clang-tidy - not found")
+        if(CLANG_TIDY_IS_REQUIRED)
+            message(FATAL_ERROR "clang-tidy is required but wasn't found")
+        endif()
     else()
-        message(STATUS "Looking for clang-tidy - found")
+        message(STATUS "Looking for clang-tidy - found: ${CLANG_TIDY}")
         set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY}")
     endif()
 endif()
+
+# This is GTK-specific, but is exposed in this top-level file so that
+# it can be shared by `gtk/` and by `tests/gtk/`.
+set(TR_GTK_APP_ID "com.transmissionbt.transmission" CACHE INTERNAL "the app id the client and its desktop file share")
 
 if(ENABLE_TESTS)
     enable_testing()
@@ -800,6 +819,7 @@ function(tr_install_web DST_DIR)
 endfunction()
 
 add_subdirectory(libtransmission)
+add_subdirectory(libtransmission-app)
 
 set(MAC_PROJECT_DIR macosx)
 

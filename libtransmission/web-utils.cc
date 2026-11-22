@@ -14,7 +14,7 @@
 #include <string_view>
 #include <utility>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #define PSL_STATIC
 #include <libpsl.h>
@@ -176,22 +176,14 @@ char const* tr_webGetResponseStr(long code)
 namespace
 {
 
-auto parsePort(std::string_view port_sv)
+constexpr std::optional<uint16_t> getPortForScheme(std::string_view scheme)
 {
-    auto const port = tr_num_parse<int>(port_sv);
-
-    using PortLimits = std::numeric_limits<uint16_t>;
-    return port && PortLimits::min() <= *port && *port <= PortLimits::max() ? *port : -1;
-}
-
-constexpr std::string_view getPortForScheme(std::string_view scheme)
-{
-    auto constexpr KnownSchemes = std::array<std::pair<std::string_view, std::string_view>, 5>{ {
-        { "ftp"sv, "21"sv },
-        { "http"sv, "80"sv },
-        { "https"sv, "443"sv },
-        { "sftp"sv, "22"sv },
-        { "udp"sv, "80"sv },
+    auto constexpr KnownSchemes = std::array<std::pair<std::string_view, uint16_t>, 5>{ {
+        { "ftp"sv, 21U },
+        { "http"sv, 80U },
+        { "https"sv, 443U },
+        { "sftp"sv, 22U },
+        { "udp"sv, 80U },
     } };
 
     for (auto const& [known_scheme, port] : KnownSchemes)
@@ -202,7 +194,7 @@ constexpr std::string_view getPortForScheme(std::string_view scheme)
         }
     }
 
-    return "-1"sv;
+    return {};
 }
 
 TR_CONSTEXPR20 bool urlCharsAreValid(std::string_view url)
@@ -291,6 +283,19 @@ std::string_view getSiteName(std::string_view host)
 
     return host;
 }
+
+// Not part of the RFC3986 standard, but included for convenience
+// when using the result with API that does not accept IPv6 address
+// strings that are wrapped in square brackets (e.g. inet_pton())
+std::string_view getHostWoBrackets(std::string_view host)
+{
+    if (tr_strv_starts_with(host, '['))
+    {
+        host.remove_prefix(1);
+        host.remove_suffix(1);
+    }
+    return host;
+}
 } // namespace
 
 std::optional<tr_url_parsed_t> tr_urlParse(std::string_view url)
@@ -347,10 +352,6 @@ std::optional<tr_url_parsed_t> tr_urlParse(std::string_view url)
             }
             parsed.host = remain.substr(0, pos + 1);
             remain.remove_prefix(pos + 1);
-            if (tr_strv_starts_with(remain, ':'))
-            {
-                remain.remove_prefix(1);
-            }
         }
         // Not legal by RFC3986 standards, but sometimes users omit
         // square brackets for an IPv6 address with an implicit port
@@ -361,10 +362,37 @@ std::optional<tr_url_parsed_t> tr_urlParse(std::string_view url)
         }
         else
         {
-            parsed.host = tr_strv_sep(&remain, ':');
+            pos = remain.find(':');
+            parsed.host = remain.substr(0, pos);
+            remain.remove_prefix(std::size(parsed.host));
         }
+
+        if (std::empty(remain))
+        {
+            auto const port = getPortForScheme(parsed.scheme);
+            if (!port)
+            {
+                return std::nullopt;
+            }
+            parsed.port = *port;
+        }
+        else if (tr_strv_starts_with(remain, ':'))
+        {
+            remain.remove_prefix(1);
+            auto const port = tr_num_parse<uint16_t>(remain);
+            if (!port || *port == 0U)
+            {
+                return std::nullopt;
+            }
+            parsed.port = *port;
+        }
+        else
+        {
+            return std::nullopt;
+        }
+
+        parsed.host_wo_brackets = getHostWoBrackets(parsed.host);
         parsed.sitename = getSiteName(parsed.host);
-        parsed.port = parsePort(!std::empty(remain) ? remain : getPortForScheme(parsed.scheme));
     }
 
     //  The path is terminated by the first question mark ("?") or
@@ -420,20 +448,18 @@ std::string tr_urlTrackerLogName(std::string_view url)
     return std::string{ url };
 }
 
-tr_url_query_view::iterator& tr_url_query_view::iterator::operator++()
+std::vector<std::pair<std::string_view, std::string_view>> tr_url_parsed_t::query_entries() const
 {
-    auto pair = tr_strv_sep(&remain, '&');
-    keyval.first = tr_strv_sep(&pair, '=');
-    keyval.second = pair;
-    return *this;
-}
-
-tr_url_query_view::iterator tr_url_query_view::begin() const
-{
-    auto it = iterator{};
-    it.remain = query;
-    ++it;
-    return it;
+    auto tmp = query;
+    auto ret = std::vector<std::pair<std::string_view, std::string_view>>{};
+    ret.reserve(std::count(std::begin(tmp), std::end(tmp), '&') + 1U);
+    while (!std::empty(tmp))
+    {
+        auto val = tr_strv_sep(&tmp, '&');
+        auto key = tr_strv_sep(&val, '=');
+        ret.emplace_back(key, val);
+    }
+    return ret;
 }
 
 std::string tr_urlPercentDecode(std::string_view in)

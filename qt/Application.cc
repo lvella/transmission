@@ -6,9 +6,6 @@
 #include "Application.h"
 
 #include <algorithm>
-#include <array>
-#include <ctime>
-#include <memory>
 #include <utility>
 
 #include <QIcon>
@@ -17,7 +14,6 @@
 #include <QProcess>
 #include <QRect>
 #include <QSystemTrayIcon>
-#include <QtDebug>
 
 #ifdef QT_DBUS_LIB
 #include <QDBusConnection>
@@ -31,44 +27,36 @@
 
 #include <libtransmission/transmission.h>
 
-#include <libtransmission/tr-getopt.h>
-#include <libtransmission/utils.h>
+#include <libtransmission-app/startup-coordinator.h>
+
 #include <libtransmission/values.h>
-#include <libtransmission/version.h>
 
 #include "AccessibleSqueezeLabel.h"
 #include "AddData.h"
-#include "InteropHelper.h"
 #include "MainWindow.h"
 #include "OptionsDialog.h"
 #include "Prefs.h"
 #include "Session.h"
 #include "TorrentModel.h"
+#include "Utils.h"
 #include "WatchDir.h"
 
 namespace
 {
 
-std::array<tr_option, 8> const Opts = {
-    tr_option{ 'g', "config-dir", "Where to look for configuration files", "g", true, "<path>" },
-    { 'm', "minimized", "Start minimized in system tray", "m", false, nullptr },
-    { 'p', "port", "Port to use when connecting to an existing session", "p", true, "<port>" },
-    { 'r', "remote", "Connect to an existing session at the specified hostname", "r", true, "<host>" },
-    { 'u', "username", "Username to use when connecting to an existing session", "u", true, "<username>" },
-    { 'v', "version", "Show version number and exit", "v", false, nullptr },
-    { 'w', "password", "Password to use when connecting to an existing session", "w", true, "<password>" },
-    { 0, nullptr, nullptr, nullptr, false, nullptr }
-};
-
-char const* getUsage()
-{
-    return "Usage:\n"
-           "  transmission [OPTIONS...] [torrent files]";
-}
+// NOLINTBEGIN(cert-err58-cpp)
+auto const ConfigName = QStringLiteral("transmission");
+#ifdef QT_DBUS_LIB
+auto const FDONotificationsServiceName = QStringLiteral("org.freedesktop.Notifications");
+auto const FDONotificationsPath = QStringLiteral("/org/freedesktop/Notifications");
+auto const FDONotificationsInterfaceName = QStringLiteral("org.freedesktop.Notifications");
+#endif
+// NOLINTEND(cert-err58-cpp)
 
 auto constexpr StatsRefreshIntervalMsec = 3000;
 auto constexpr SessionRefreshIntervalMsec = 3000;
 auto constexpr ModelRefreshIntervalMsec = 3000;
+auto constexpr InternRefreshIntervalMsec = 5 * 60 * 1000;
 
 bool loadTranslation(QTranslator& translator, QString const& name, QLocale const& locale, QStringList const& search_directories)
 {
@@ -81,6 +69,32 @@ bool loadTranslation(QTranslator& translator, QString const& name, QLocale const
     }
 
     return false;
+}
+
+void initUnits()
+{
+    using Config = libtransmission::Values::Config;
+
+    Config::speed = { Config::Base::Kilo,
+                      QObject::tr("B/s").toStdString(),
+                      QObject::tr("kB/s").toStdString(),
+                      QObject::tr("MB/s").toStdString(),
+                      QObject::tr("GB/s").toStdString(),
+                      QObject::tr("TB/s").toStdString() };
+
+    Config::memory = { Config::Base::Kibi,
+                       QObject::tr("B").toStdString(),
+                       QObject::tr("KiB").toStdString(),
+                       QObject::tr("MiB").toStdString(),
+                       QObject::tr("GiB").toStdString(),
+                       QObject::tr("TiB").toStdString() };
+
+    Config::storage = { Config::Base::Kilo,
+                        QObject::tr("B").toStdString(),
+                        QObject::tr("kB").toStdString(),
+                        QObject::tr("MB").toStdString(),
+                        QObject::tr("GB").toStdString(),
+                        QObject::tr("TB").toStdString() };
 }
 
 [[nodiscard]] auto makeWindowIcon()
@@ -116,136 +130,37 @@ QAccessibleInterface* accessibleFactory(QString const& className, QObject* objec
 
 } // namespace
 
-Application::Application(int& argc, char** argv)
-    : QApplication{ argc, argv }
-    , config_name_{ QStringLiteral("transmission") }
-    , display_name_{ QStringLiteral("transmission-qt") }
+void Application::pruneInternedStrings()
 {
-    setApplicationName(config_name_);
+    interned_strings_.erase_if([](QString const& str) { return str.isDetached(); });
+}
+
+QString Application::intern(QString const& in)
+{
+    return *interned_strings_.insert(in).first;
+}
+
+Application::Application(
+    std::unique_ptr<Prefs> prefs,
+    std::unique_ptr<tr::interop::StartupCoordinator> startup_coordinator,
+    bool minimized,
+    QString const& config_dir,
+    QStringList const& filenames,
+    int& argc,
+    char** argv)
+    : QApplication{ argc, argv }
+    , prefs_(std::move(prefs))
+    , startup_coordinator_(std::move(startup_coordinator))
+{
+    setApplicationName(ConfigName);
     loadTranslations();
     initUnits();
-
-#if defined(_WIN32) || defined(__APPLE__)
-
-    if (QIcon::themeName().isEmpty())
-    {
-        QIcon::setThemeName(QStringLiteral("Faenza"));
-    }
-
-#endif
 
     setWindowIcon(makeWindowIcon());
 
 #ifdef __APPLE__
     setAttribute(Qt::AA_DontShowIconsInMenus);
 #endif
-
-    // parse the command-line arguments
-    int c = 0;
-    bool minimized = false;
-    char const* optarg = nullptr;
-    QString host;
-    QString port;
-    QString username;
-    QString password;
-    QString config_dir;
-    QStringList filenames;
-
-    while ((c = tr_getopt(getUsage(), argc, const_cast<char const**>(argv), Opts.data(), &optarg)) != TR_OPT_DONE)
-    {
-        switch (c)
-        {
-        case 'g':
-            config_dir = QString::fromUtf8(optarg);
-            break;
-
-        case 'p':
-            port = QString::fromUtf8(optarg);
-            break;
-
-        case 'r':
-            host = QString::fromUtf8(optarg);
-            break;
-
-        case 'u':
-            username = QString::fromUtf8(optarg);
-            break;
-
-        case 'w':
-            password = QString::fromUtf8(optarg);
-            break;
-
-        case 'm':
-            minimized = true;
-            break;
-
-        case 'v':
-            qInfo() << qPrintable(display_name_) << LONG_VERSION_STRING;
-            quitLater();
-            return;
-
-        case TR_OPT_ERR:
-            qWarning() << qPrintable(QObject::tr("Invalid option"));
-            tr_getopt_usage(qPrintable(display_name_), getUsage(), Opts.data());
-            quitLater();
-            return;
-
-        default:
-            filenames.append(QString::fromUtf8(optarg));
-            break;
-        }
-    }
-
-    // try to delegate the work to an existing copy of Transmission
-    // before starting ourselves...
-    InteropHelper const interop_client;
-
-    if (interop_client.isConnected())
-    {
-        bool delegated = false;
-
-        for (QString const& filename : filenames)
-        {
-            auto const a = AddData(filename);
-            QString metainfo;
-
-            switch (a.type)
-            {
-            case AddData::URL:
-                metainfo = a.url.toString();
-                break;
-
-            case AddData::MAGNET:
-                metainfo = a.magnet;
-                break;
-
-            case AddData::FILENAME:
-            case AddData::METAINFO:
-                metainfo = QString::fromUtf8(a.toBase64());
-                break;
-
-            default:
-                break;
-            }
-
-            if (!metainfo.isEmpty() && interop_client.addMetainfo(metainfo))
-            {
-                delegated = true;
-            }
-        }
-
-        if (delegated)
-        {
-            quitLater();
-            return;
-        }
-    }
-
-    // set the fallback config dir
-    if (config_dir.isNull())
-    {
-        config_dir = QString::fromStdString(tr_getDefaultConfigDir("transmission"));
-    }
 
     // ensure our config directory exists
     QDir const dir(config_dir);
@@ -257,45 +172,6 @@ Application::Application(int& argc, char** argv)
 
     // is this the first time we've run transmission?
     bool const first_time = !dir.exists(QStringLiteral("settings.json"));
-
-    // initialize the prefs
-    prefs_ = std::make_unique<Prefs>(config_dir);
-
-    if (!host.isNull())
-    {
-        prefs_->set(Prefs::SESSION_REMOTE_HOST, host);
-    }
-
-    if (!port.isNull())
-    {
-        prefs_->set(Prefs::SESSION_REMOTE_PORT, port.toUInt());
-    }
-
-    if (!username.isNull())
-    {
-        prefs_->set(Prefs::SESSION_REMOTE_USERNAME, username);
-    }
-
-    if (!password.isNull())
-    {
-        prefs_->set(Prefs::SESSION_REMOTE_PASSWORD, password);
-    }
-
-    if (!host.isNull() || !port.isNull() || !username.isNull() || !password.isNull())
-    {
-        prefs_->set(Prefs::SESSION_IS_REMOTE, true);
-    }
-
-    if (prefs_->getBool(Prefs::START_MINIMIZED))
-    {
-        minimized = true;
-    }
-
-    // start as minimized only if the system tray present
-    if (!prefs_->getBool(Prefs::SHOW_TRAY_ICON))
-    {
-        minimized = false;
-    }
 
 #if QT_CONFIG(accessibility)
     QAccessible::installFactory(&accessibleFactory);
@@ -313,6 +189,7 @@ Application::Application(int& argc, char** argv)
     connect(model_.get(), &TorrentModel::torrentsNeedInfo, this, &Application::onTorrentsNeedInfo);
     connect(prefs_.get(), &Prefs::changed, this, &Application::refreshPref);
     connect(session_.get(), &Session::sourceChanged, this, &Application::onSessionSourceChanged);
+    connect(session_.get(), &Session::configDirContended, this, &Application::onConfigDirContended);
     connect(session_.get(), &Session::torrentsRemoved, model_.get(), &TorrentModel::removeTorrents);
     connect(session_.get(), &Session::torrentsUpdated, model_.get(), &TorrentModel::updateTorrents);
     connect(watch_dir_.get(), &WatchDir::torrentFileAdded, this, qOverload<QString const&>(&Application::addWatchdirTorrent));
@@ -341,6 +218,12 @@ Application::Application(int& argc, char** argv)
     timer->setInterval(SessionRefreshIntervalMsec);
     timer->start();
 
+    timer = &intern_timer_;
+    connect(timer, &QTimer::timeout, this, &Application::pruneInternedStrings);
+    timer->setSingleShot(false);
+    timer->setInterval(InternRefreshIntervalMsec);
+    timer->start();
+
     maybeUpdateBlocklist();
 
     if (!first_time)
@@ -352,24 +235,9 @@ Application::Application(int& argc, char** argv)
         window_->openSession();
     }
 
-    if (!prefs_->getBool(Prefs::USER_HAS_GIVEN_INFORMED_CONSENT))
+    if (configDirIsContended())
     {
-        auto* dialog = new QMessageBox{ QMessageBox::Information,
-                                        QString{},
-                                        tr("<b>Transmission is a file sharing program.</b>"),
-                                        QMessageBox::Ok | QMessageBox::Cancel,
-                                        window_.get() };
-        dialog->setInformativeText(
-            tr("When you run a torrent, its data will be made available to others by means of upload. "
-               "Any content you share is your sole responsibility."));
-        dialog->button(QMessageBox::Ok)->setText(tr("I &Agree"));
-        dialog->setDefaultButton(QMessageBox::Ok);
-        dialog->setModal(true);
-
-        connect(dialog, &QDialog::finished, this, &Application::consentGiven);
-
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        dialog->show();
+        return;
     }
 
     // torrent files passed in on the command line
@@ -378,21 +246,31 @@ Application::Application(int& argc, char** argv)
         addTorrent(AddData{ filename });
     }
 
-    InteropHelper::registerObject(this);
-
 #ifdef QT_DBUS_LIB
     if (auto bus = QDBusConnection::sessionBus(); bus.isConnected())
     {
         bus.connect(
-            fdo_notifications_service_name_,
-            fdo_notifications_path_,
-            fdo_notifications_interface_name_,
-            QLatin1String("ActionInvoked"),
+            FDONotificationsServiceName,
+            FDONotificationsPath,
+            FDONotificationsInterfaceName,
+            QStringLiteral("ActionInvoked"),
             this,
             SLOT(onNotificationActionInvoked(quint32, QString)));
     }
 
 #endif
+
+    // Publish whichever session this client shows. A launch handed here lands in that
+    // session, a remote one included; the click reaches the window the user has open
+    // on this config dir rather than starting a second client beside it.
+    startup_coordinator_->publish(interop_instance_);
+}
+
+Application::~Application() = default;
+
+bool Application::configDirIsContended() const noexcept
+{
+    return config_dir_contended_;
 }
 
 void Application::loadTranslations()
@@ -425,30 +303,11 @@ void Application::loadTranslations()
         installTranslator(&qt_translator_);
     }
 
-    if (loadTranslation(app_translator_, config_name_, locale, app_qm_dirs) ||
-        loadTranslation(app_translator_, config_name_, english_locale, app_qm_dirs))
+    if (loadTranslation(app_translator_, ConfigName, locale, app_qm_dirs) ||
+        loadTranslation(app_translator_, ConfigName, english_locale, app_qm_dirs))
     {
         installTranslator(&app_translator_);
     }
-}
-
-void Application::initUnits()
-{
-    using Config = libtransmission::Values::Config;
-
-    Config::Speed = { Config::Base::Kilo,       tr("B/s").toStdString(),  tr("kB/s").toStdString(),
-                      tr("MB/s").toStdString(), tr("GB/s").toStdString(), tr("TB/s").toStdString() };
-
-    Config::Memory = { Config::Base::Kibi,      tr("B").toStdString(),   tr("KiB").toStdString(),
-                       tr("MiB").toStdString(), tr("GiB").toStdString(), tr("TiB").toStdString() };
-
-    Config::Storage = { Config::Base::Kilo,     tr("B").toStdString(),  tr("kB").toStdString(),
-                        tr("MB").toStdString(), tr("GB").toStdString(), tr("TB").toStdString() };
-}
-
-void Application::quitLater() const
-{
-    QTimer::singleShot(0, this, SLOT(quit()));
 }
 
 void Application::onTorrentsEdited(torrent_ids_t const& torrent_ids) const
@@ -514,25 +373,11 @@ void Application::onTorrentsNeedInfo(torrent_ids_t const& torrent_ids) const
 void Application::notifyTorrentAdded(Torrent const* tor) const
 {
     QStringList actions;
-    actions << QString{ QLatin1String("start-now(%1)") }.arg(tor->id()) << QObject::tr("Start Now");
+    actions << QString{ QStringLiteral("start-now(%1)") }.arg(tor->id()) << QObject::tr("Start Now");
     notifyApp(tr("Torrent Added"), tor->name(), actions);
 }
 
-/***
-****
-***/
-
-void Application::consentGiven(int result) const
-{
-    if (result == QMessageBox::Ok)
-    {
-        prefs_->set<bool>(Prefs::USER_HAS_GIVEN_INFORMED_CONSENT, true);
-    }
-    else
-    {
-        quit();
-    }
-}
+// ---
 
 void Application::saveGeometry() const
 {
@@ -546,9 +391,7 @@ void Application::saveGeometry() const
     }
 }
 
-/***
-****
-***/
+// ---
 
 void Application::refreshPref(int key) const
 {
@@ -584,6 +427,18 @@ void Application::maybeUpdateBlocklist() const
         session_->updateBlocklist();
         prefs_->set(Prefs::BLOCKLIST_DATE, now);
     }
+}
+
+void Application::onConfigDirContended()
+{
+    config_dir_contended_ = true;
+
+    // This launch is exiting; the settings on disk are the holder's.
+    prefs_->disableSaveOnExit();
+
+    // A session started from the connection dialog gets here after exec() is under way,
+    // where returning from the constructor no longer ends the launch.
+    quit();
 }
 
 void Application::onSessionSourceChanged() const
@@ -666,9 +521,9 @@ bool Application::notifyApp(QString const& title, QString const& body, QStringLi
     if (auto bus = QDBusConnection::sessionBus(); bus.isConnected())
     {
         QDBusMessage m = QDBusMessage::createMethodCall(
-            fdo_notifications_service_name_,
-            fdo_notifications_path_,
-            fdo_notifications_interface_name_,
+            FDONotificationsServiceName,
+            FDONotificationsPath,
+            FDONotificationsInterfaceName,
             QStringLiteral("Notify"));
         QVariantList args;
         args.append(QStringLiteral("Transmission")); // app_name
@@ -677,9 +532,10 @@ bool Application::notifyApp(QString const& title, QString const& body, QStringLi
         args.append(title); // summary
         args.append(body); // body
         args.append(actions);
-        args.append(QVariantMap{ {
-            std::make_pair(QStringLiteral("category"), QVariant{ QStringLiteral("transfer.complete") }),
-        } }); // hints
+        args.append(
+            QVariantMap{ {
+                std::make_pair(QStringLiteral("category"), QVariant{ QStringLiteral("transfer.complete") }),
+            } }); // hints
         args.append(static_cast<int32_t>(-1)); // use the default timeout period
         m.setArguments(args);
         QDBusReply<quint32> const reply_msg = bus.call(m);
@@ -699,8 +555,9 @@ bool Application::notifyApp(QString const& title, QString const& body, QStringLi
 #ifdef QT_DBUS_LIB
 void Application::onNotificationActionInvoked(quint32 /* notification_id */, QString action_key)
 {
-    auto const match = start_now_regex_.match(action_key);
-    if (match.hasMatch())
+    static QRegularExpression const StartNowRegex{ QStringLiteral(R"rgx(start-now\((\d+)\))rgx") };
+
+    if (auto const match = StartNowRegex.match(action_key); match.hasMatch())
     {
         int const torrent_id = match.captured(1).toInt();
         session_->startTorrentsNow({ torrent_id });
@@ -708,18 +565,34 @@ void Application::onNotificationActionInvoked(quint32 /* notification_id */, QSt
 }
 #endif
 
-/***
-****
-***/
-
-int tr_main(int argc, char** argv)
+tr::interop::Reply Application::LocalInstance::present_window(std::string_view const activation_token)
 {
-    auto const init_mgr = tr_lib_init();
+    // Show and unminimize the window rather than just alert the user.
+    // We took over another launch, and a launch that produces no window did nothing.
+    app_.window_->presentWindow(Utils::toQString(activation_token));
+    return tr::interop::Reply::Yes;
+}
 
-    tr_locale_set_global("");
+tr::interop::Reply Application::LocalInstance::add_metainfo(std::string_view const metainfo)
+{
+    auto add_data = AddData::fromWireMetainfo(metainfo);
+    if (!add_data)
+    {
+        return tr::interop::Reply::No;
+    }
 
-    InteropHelper::initialize();
+    app_.addTorrent(std::move(*add_data));
+    return tr::interop::Reply::Yes;
+}
 
-    Application const app(argc, argv);
-    return QApplication::exec();
+std::string Application::LocalInstance::config_dir()
+{
+    // We canonicalize here rather than trust however this process was configured.
+    // interop.h requires a canonical answer from every implementation.
+    return tr::interop::canonical_config_dir(app_.prefs_->configDir().toStdString());
+}
+
+std::string Application::LocalInstance::description() const
+{
+    return "this process";
 }

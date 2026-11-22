@@ -9,6 +9,9 @@
 
 #include <libtransmission/transmission.h>
 
+#include <libtransmission-app/interop.h> // is_metainfo_link()
+
+#include <libtransmission/crypto-utils.h> // tr_base64_decode()
 #include <libtransmission/error.h>
 #include <libtransmission/torrent-metainfo.h>
 #include <libtransmission/utils.h>
@@ -55,22 +58,24 @@ int AddData::set(QString const& key)
     if (auto const key_std = key.toStdString(); tr_urlIsValid(key_std))
     {
         this->url = key;
-        type = URL;
-    }
-    else if (QFile{ key }.exists())
-    {
-        this->filename = QDir::fromNativeSeparators(key);
-        type = FILENAME;
-
-        auto file = QFile{ key };
-        file.open(QIODevice::ReadOnly);
-        this->metainfo = file.readAll();
-        file.close();
+        this->type = URL;
     }
     else if (tr_magnet_metainfo{}.parseMagnet(key_std))
     {
         this->magnet = key;
         this->type = MAGNET;
+    }
+    else if (auto const kurl = QUrl::fromUserInput(key, QDir::currentPath()); kurl.isValid() && kurl.isLocalFile())
+    {
+        if (auto file = QFile{ kurl.toLocalFile() }; file.exists())
+        {
+            this->filename = file.fileName();
+            this->type = FILENAME;
+
+            file.open(QIODevice::ReadOnly);
+            this->metainfo = file.readAll();
+            file.close();
+        }
     }
     else if (auto const raw = QByteArray::fromBase64(key.toUtf8()); !raw.isEmpty())
     {
@@ -82,7 +87,28 @@ int AddData::set(QString const& key)
         this->type = NONE;
     }
 
-    return type;
+    return this->type;
+}
+
+std::optional<AddData> AddData::fromWireMetainfo(std::string_view const metainfo)
+{
+    // The sending end classified with is_metainfo_link() too,
+    // so the same argument cannot be a link there and a torrent here.
+    if (tr::interop::is_metainfo_link(metainfo))
+    {
+        return create(Utils::toQString(metainfo));
+    }
+
+    auto const contents = tr::interop::decode_metainfo_torrent(metainfo);
+    if (!contents)
+    {
+        return {};
+    }
+
+    auto ret = AddData{};
+    ret.type = METAINFO;
+    ret.metainfo = QByteArray{ std::data(*contents), static_cast<int>(std::size(*contents)) };
+    return ret;
 }
 
 QByteArray AddData::toBase64() const

@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include "libtransmission/clients.h"
 #include "libtransmission/tr-macros.h" // tr_peer_id_t
@@ -49,7 +49,7 @@ constexpr std::pair<char*, size_t> buf_append(char* buf, size_t buflen, T t, Arg
 
 constexpr std::string_view base62str(uint8_t chr)
 {
-    // clang-format off
+    // clang-format off: 90 characters per column
     auto constexpr Strings = std::array<std::string_view, 256>{
          "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,
          "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,  "x"sv,

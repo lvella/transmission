@@ -7,9 +7,9 @@
 #include "GtkCompat.h"
 #include "Torrent.h"
 
+#include <libtransmission-app/favicon-cache.h>
+
 #include <libtransmission/transmission.h>
-#include <libtransmission/favicon-cache.h>
-#include <libtransmission/tr-macros.h>
 #include <libtransmission/variant.h>
 
 #include <gdkmm/pixbuf.h>
@@ -31,6 +31,11 @@
 class Session : public Glib::Object
 {
 public:
+    Session(Session&&) = delete;
+    Session(Session const&) = delete;
+    Session& operator=(Session&&) = delete;
+    Session& operator=(Session const&) = delete;
+
     enum ErrorCode : uint16_t
     {
         ERR_ADD_TORRENT_ERR = 1,
@@ -50,8 +55,6 @@ public:
 public:
     ~Session() override;
 
-    TR_DISABLE_COPY_MOVE(Session)
-
     static Glib::RefPtr<Session> create(tr_session* session);
 
     tr_session* close();
@@ -69,7 +72,7 @@ public:
 
     tr_torrent* find_torrent(tr_torrent_id_t id) const;
 
-    FaviconCache<Glib::RefPtr<Gdk::Pixbuf>>& favicon_cache() const;
+    transmission::app::FaviconCache<Glib::RefPtr<Gdk::Pixbuf>>& favicon_cache() const;
 
     /******
     *******
@@ -132,16 +135,35 @@ public:
     void set_pref(tr_quark key, int val);
     void set_pref(tr_quark key, double val);
 
-    /**
-    ***
-    **/
+    // ---
+
+    // Helper for building RPC payloads.
+    // TODO(C++20): fold these two into a single std::span method
+    template<typename T>
+    [[nodiscard]] static auto to_variant(std::vector<T> const& items)
+    {
+        auto vec = tr_variant::Vector{};
+        vec.reserve(std::size(items));
+        for (auto const& item : items)
+        {
+            vec.emplace_back(item);
+        }
+        return vec;
+    }
+    template<typename T>
+    [[nodiscard]] static auto to_variant(std::initializer_list<T> items)
+    {
+        return to_variant(std::vector<T>{ std::move(items) });
+    }
+
+    // ---
 
     void port_test(PortTestIpProtocol ip_protocol);
     bool port_test_pending(PortTestIpProtocol ip_protocol) const noexcept;
 
     void blocklist_update();
 
-    void exec(tr_variant const& request);
+    void exec(tr_quark method, tr_variant const& params);
 
     void open_folder(tr_torrent_id_t torrent_id) const;
 

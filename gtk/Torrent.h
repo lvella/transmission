@@ -68,6 +68,7 @@ public:
         STALLED,
         TOTAL_SIZE,
         TRACKERS,
+        N_FLAGS,
     };
 
     using ChangeFlags = Flags<ChangeFlag>;
@@ -110,7 +111,7 @@ public:
     bool get_sensitive() const;
     std::vector<Glib::ustring> get_css_classes() const;
 
-    ChangeFlags update();
+    [[nodiscard]] ChangeFlags update();
 
     static Glib::RefPtr<Torrent> create(tr_torrent* torrent);
 

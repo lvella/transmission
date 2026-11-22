@@ -17,8 +17,6 @@
 #include <QTimer>
 #include <QWidgetList>
 
-#include <libtransmission/tr-macros.h>
-
 #include "Filters.h"
 #include "Speed.h"
 #include "TorrentFilter.h"
@@ -50,15 +48,23 @@ extern "C"
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(MainWindow)
 
 public:
     MainWindow(Session&, Prefs&, TorrentModel&, bool minimized);
+    MainWindow(MainWindow&&) = delete;
+    MainWindow(MainWindow const&) = delete;
+    MainWindow& operator=(MainWindow&&) = delete;
+    MainWindow& operator=(MainWindow const&) = delete;
 
     [[nodiscard]] constexpr QSystemTrayIcon& trayIcon() noexcept
     {
         return tray_icon_;
     }
+
+    // Bring the window up from wherever it is: hidden to the tray, minimized, or behind another.
+    // `activation_token` is the caller's pass for taking focus; without one the
+    // compositor may leave the window unfocused. See tr::interop::activation_token().
+    void presentWindow(QString const& activation_token = {});
 
 public slots:
     void startAll();
@@ -74,7 +80,6 @@ public slots:
     void queueMoveDown();
     void queueMoveBottom();
     void reannounceSelected();
-    void onNetworkTimer();
 
     void setToolbarVisible(bool);
     void setFilterbarVisible(bool);
@@ -114,7 +119,6 @@ private slots:
     void openTorrent();
     void openURL();
     void refreshPref(int key);
-    void refreshSoon(int fields = ~0);
     void removeTorrents(bool const delete_files);
     void setLocation();
     void setSortAscendingPref(bool);
@@ -123,16 +127,16 @@ private slots:
     void trayActivated(QSystemTrayIcon::ActivationReason);
 
 private:
-    QIcon addEmblem(QIcon icon, QStringList const& emblem_names) const;
-
-    torrent_ids_t getSelectedTorrents(bool with_metadata_only = false) const;
-    void updateNetworkIcon();
+    [[nodiscard]] torrent_ids_t getSelectedTorrents(bool with_metadata_only = false) const;
+    void updateNetworkLabel();
+    void refreshSoon(int fields);
 
     QMenu* createOptionsMenu();
     QMenu* createStatsModeMenu();
     void initStatusBar();
 
     void clearSelection();
+    void addTorrentFromClipboard();
     void addTorrent(AddData add_me, bool show_options);
 
     // QWidget
@@ -177,7 +181,7 @@ private:
     QWidget* filter_bar_ = {};
     QAction* alt_speed_action_ = {};
     QString error_message_;
-    bool auto_add_clipboard_links = {};
+    bool auto_add_clipboard_links_ = {};
     QStringList clipboard_processed_keys_ = {};
 
     QString const total_ratio_stats_mode_name_ = QStringLiteral("total-ratio");
@@ -193,7 +197,7 @@ private:
         size_t peers_sending = 0;
         size_t peers_receiving = 0;
     };
-    TransferStats getTransferStats() const;
+    [[nodiscard]] TransferStats getTransferStats() const;
 
     enum
     {
@@ -201,12 +205,14 @@ private:
         REFRESH_STATUS_BAR = (1 << 1),
         REFRESH_TRAY_ICON = (1 << 2),
         REFRESH_TORRENT_VIEW_HEADER = (1 << 3),
-        REFRESH_ACTION_SENSITIVITY = (1 << 4)
+        REFRESH_ACTION_SENSITIVITY = (1 << 4),
+        REFRESH_ICONS = (1 << 5)
     };
     int refresh_fields_ = {};
     QTimer refresh_timer_;
 
     void refreshActionSensitivity();
+    void refreshIcons();
     void refreshStatusBar(TransferStats const&);
     void refreshTitle();
     void refreshTorrentViewHeader();

@@ -38,7 +38,7 @@ function global:Build-Transmission(
     }
 
     $OpenSslLibSuffix = if ($Arch -eq 'x86') { '' } else { '-x64' }
-    foreach ($x in @('libcurl', "libcrypto-3${OpenSslLibSuffix}", "libssl-3${OpenSslLibSuffix}", 'zlib', 'dbus-1')) {
+    foreach ($x in @('libcurl', "libcrypto-3${OpenSslLibSuffix}", "libssl-3${OpenSslLibSuffix}", 'z', 'dbus-1')) {
         if ($DepsPrefixDir -ne $PrefixDir) {
             Copy-Item -Path (Join-Path $DepsPrefixDir bin "${x}.dll") -Destination (Join-Path $PrefixDir bin)
         }
@@ -81,11 +81,12 @@ function global:Build-Transmission(
     }
     Copy-Item -Path (Join-Path $DepsPrefixDir plugins platforms qwindows.pdb) -Destination $DebugSymbolsDir
 
+    $QtStyle = if ($UseQtVersion -eq '5') { 'windowsvista' } else { 'modernwindows' }
     if ($DepsPrefixDir -ne $PrefixDir) {
         New-Item -Path (Join-Path $PrefixDir plugins styles) -ItemType Directory -ErrorAction Ignore | Out-Null
-        Copy-Item -Path (Join-Path $DepsPrefixDir plugins styles qwindowsvistastyle.dll) -Destination (Join-Path $PrefixDir plugins styles)
+        Copy-Item -Path (Join-Path $DepsPrefixDir plugins styles "q${QtStyle}style.dll") -Destination (Join-Path $PrefixDir plugins styles)
     }
-    Copy-Item -Path (Join-Path $DepsPrefixDir plugins styles qwindowsvistastyle.pdb) -Destination $DebugSymbolsDir
+    Copy-Item -Path (Join-Path $DepsPrefixDir plugins styles "q${QtStyle}style.pdb") -Destination $DebugSymbolsDir
 
     if ($DepsPrefixDir -ne $PrefixDir) {
         Copy-Item -Path (Join-Path $DepsPrefixDir translations) -Destination $PrefixDir -Recurse

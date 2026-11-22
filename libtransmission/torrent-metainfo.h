@@ -44,11 +44,11 @@ public:
     }
     [[nodiscard]] TR_CONSTEXPR20 auto file_count() const noexcept
     {
-        return files().fileCount();
+        return files().file_count();
     }
     [[nodiscard]] TR_CONSTEXPR20 auto file_size(tr_file_index_t i) const
     {
-        return files().fileSize(i);
+        return files().file_size(i);
     }
     [[nodiscard]] TR_CONSTEXPR20 auto const& file_subpath(tr_file_index_t i) const
     {
@@ -57,7 +57,7 @@ public:
 
     void set_file_subpath(tr_file_index_t i, std::string_view subpath)
     {
-        files_.setPath(i, subpath);
+        files_.set_path(i, subpath);
     }
 
     /// BLOCK INFO
@@ -78,6 +78,10 @@ public:
     [[nodiscard]] constexpr auto block_loc(tr_block_index_t block) const noexcept
     {
         return block_info().block_loc(block);
+    }
+    [[nodiscard]] constexpr auto block_last_loc(tr_block_index_t block) const noexcept
+    {
+        return block_info().block_last_loc(block);
     }
     [[nodiscard]] constexpr auto piece_loc(tr_piece_index_t piece, uint32_t offset = 0, uint32_t length = 0) const noexcept
     {
@@ -160,24 +164,19 @@ public:
         return info_dict_offset_;
     }
 
-    [[nodiscard]] constexpr auto pieces_offset() const noexcept
-    {
-        return pieces_offset_;
-    }
-
     // UTILS
 
-    [[nodiscard]] auto torrent_file(std::string_view torrent_dir) const
+    [[nodiscard]] auto torrent_file(std::string_view torrent_dir = {}) const
     {
         return make_filename(torrent_dir, name(), info_hash_string(), BasenameFormat::Hash, ".torrent");
     }
 
-    [[nodiscard]] auto magnet_file(std::string_view torrent_dir) const
+    [[nodiscard]] auto magnet_file(std::string_view torrent_dir = {}) const
     {
         return make_filename(torrent_dir, name(), info_hash_string(), BasenameFormat::Hash, ".magnet");
     }
 
-    [[nodiscard]] auto resume_file(std::string_view resume_dir) const
+    [[nodiscard]] auto resume_file(std::string_view resume_dir = {}) const
     {
         return make_filename(resume_dir, name(), info_hash_string(), BasenameFormat::Hash, ".resume");
     }
@@ -199,7 +198,7 @@ private:
     static bool parse_impl(tr_torrent_metainfo& setme, std::string_view benc, tr_error* error);
     static std::string fix_webseed_url(tr_torrent_metainfo const& tm, std::string_view url);
 
-    enum class BasenameFormat
+    enum class BasenameFormat : uint8_t
     {
         Hash,
         NameAndPartialHash
@@ -234,10 +233,6 @@ private:
     // See https://www.bittorrent.org/beps/bep_0009.html
     uint64_t info_dict_size_ = 0;
     uint64_t info_dict_offset_ = 0;
-
-    // Offset of the bencoded 'pieces' checksums subset of the bencoded data.
-    // Used when loading piece checksums on demand.
-    uint64_t pieces_offset_ = 0;
 
     bool has_magnet_info_hash_ = false;
     bool is_private_ = false;

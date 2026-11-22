@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <ctime>
 #include <iterator> // for std::back_inserter
-#include <set>
 #include <string_view>
 #include <vector>
 
@@ -329,7 +328,13 @@ void TorrentModel::updateTorrents(tr_variant* torrent_list, bool is_complete_lis
         std::sort(processed.begin(), processed.end(), TorrentIdLessThan());
         torrents_t removed;
         removed.reserve(old.size());
-        std::set_difference(old.begin(), old.end(), processed.begin(), processed.end(), std::back_inserter(removed));
+        std::set_difference(
+            old.begin(),
+            old.end(),
+            processed.begin(),
+            processed.end(),
+            std::back_inserter(removed),
+            TorrentIdLessThan());
         rowsRemove(removed);
     }
 }
