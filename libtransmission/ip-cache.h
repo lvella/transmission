@@ -104,6 +104,12 @@ public:
     // Only use as a callback for web_->fetch()
     void on_response_ip_query(tr_address_type type, tr_web::FetchResponse const& response) noexcept;
 
+    // While true, update_addr() returns without doing anything.
+    [[nodiscard]] constexpr bool is_updating(tr_address_type type) const noexcept
+    {
+        return is_updating_[type] != is_updating_t::No;
+    }
+
     [[nodiscard]] constexpr auto has_ip_protocol(tr_address_type type) const noexcept
     {
         return has_ip_protocol_[type];

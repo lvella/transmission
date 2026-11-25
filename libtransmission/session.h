@@ -17,6 +17,7 @@
 #include <cstddef> // size_t
 #include <cstdint> // uintX_t
 #include <ctime> // time_t
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -111,6 +112,27 @@ private:
 
         IncomingCallback cb_;
         void* cb_data_;
+        tr_socket_t socket_ = TR_BAD_SOCKET;
+        tr::evhelpers::event_unique_ptr ev_;
+    };
+
+    // Calls back when the OS reports that an IPv6 address was added, removed or changed.
+    // Linux uses netlink; macOS and the BSDs use a routing socket.
+    // Elsewhere it never calls back, and tr_ip_cache's polling is the only refresh.
+    class IPv6AddressWatcher
+    {
+    public:
+        IPv6AddressWatcher(struct event_base* base, std::function<void()> on_change);
+        IPv6AddressWatcher(IPv6AddressWatcher&&) = delete;
+        IPv6AddressWatcher(IPv6AddressWatcher const&) = delete;
+        IPv6AddressWatcher operator=(IPv6AddressWatcher&&) = delete;
+        IPv6AddressWatcher operator=(IPv6AddressWatcher const&) = delete;
+        ~IPv6AddressWatcher();
+
+    private:
+        static void on_can_read(evutil_socket_t fd, short /*what*/, void* vself);
+
+        std::function<void()> on_change_;
         tr_socket_t socket_ = TR_BAD_SOCKET;
         tr::evhelpers::event_unique_ptr ev_;
     };
@@ -1322,6 +1344,14 @@ private:
     // depends-on: settings_, session_thread_, timer_maker_, web_
     IPCacheMediator ip_cache_mediator_{ *this };
     std::shared_ptr<tr_ip_cache> ip_cache_ = tr_ip_cache::create(ip_cache_mediator_);
+
+    // depends-on: session_thread_, timer_maker_, ip_cache_
+    // Each OS address-change event restarts the timer; when it fires, the IPv6
+    // source address is refreshed. The delay batches the several kernel
+    // events produced by a single address change.
+    static auto constexpr Ipv6ChangeSettleTime = std::chrono::seconds{ 1 };
+    std::unique_ptr<tr::Timer> ipv6_change_timer_;
+    std::optional<IPv6AddressWatcher> ipv6_address_watcher_;
 
     // depends-on: settings_, session_thread_, torrents_, global_ip_cache (via tr_session::bind_address())
     WebMediator web_mediator_{ this };

@@ -25,6 +25,24 @@
 #include <sys/stat.h> /* umask() */
 #endif
 
+#if defined(__linux__)
+#include <sys/socket.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#define TR_WATCH_IPV6_NETLINK
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <net/route.h>
+#define TR_WATCH_IPV6_ROUTE_SOCKET
+#endif
+
+#if defined(TR_WATCH_IPV6_NETLINK) || defined(TR_WATCH_IPV6_ROUTE_SOCKET)
+#include <array>
+#include <cerrno>
+#include <cstring> // std::memcpy()
+#endif
+
 #include <event2/event.h>
 
 #include <fmt/format.h> // fmt::ptr
@@ -444,6 +462,187 @@ tr_session::BoundSocket::~BoundSocket()
     }
 }
 
+// ---
+
+namespace
+{
+namespace ipv6_address_watcher_helpers
+{
+#if defined(TR_WATCH_IPV6_NETLINK)
+
+[[nodiscard]] tr_socket_t open_socket(int& err_out) noexcept
+{
+    auto const sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    if (!is_valid_socket(sock))
+    {
+        err_out = sockerrno;
+        return TR_BAD_SOCKET;
+    }
+
+    auto addr = sockaddr_nl{};
+    addr.nl_family = AF_NETLINK;
+    addr.nl_groups = RTMGRP_IPV6_IFADDR;
+    if (bind(sock, reinterpret_cast<sockaddr const*>(&addr), sizeof(addr)) != 0)
+    {
+        err_out = sockerrno;
+        tr_net_close_socket(sock);
+        return TR_BAD_SOCKET;
+    }
+
+    return sock;
+}
+
+// A netlink read can hold several messages.
+[[nodiscard]] bool is_address_change(std::byte const* buf, size_t len) noexcept
+{
+    while (len >= sizeof(nlmsghdr))
+    {
+        auto hdr = nlmsghdr{};
+        std::memcpy(&hdr, buf, sizeof(hdr));
+        if (hdr.nlmsg_len < sizeof(hdr) || hdr.nlmsg_len > len)
+        {
+            return false;
+        }
+
+        if (hdr.nlmsg_type == RTM_NEWADDR || hdr.nlmsg_type == RTM_DELADDR)
+        {
+            return true;
+        }
+
+        auto const step = std::min(size_t{ NLMSG_ALIGN(hdr.nlmsg_len) }, len);
+        buf += step;
+        len -= step;
+    }
+
+    return false;
+}
+
+#elif defined(TR_WATCH_IPV6_ROUTE_SOCKET)
+
+// The AF_INET6 protocol argument filters out other families' address messages.
+[[nodiscard]] tr_socket_t open_socket(int& err_out) noexcept
+{
+    auto const sock = socket(PF_ROUTE, SOCK_RAW, AF_INET6);
+    if (!is_valid_socket(sock))
+    {
+        err_out = sockerrno;
+    }
+    return sock;
+}
+
+// A routing socket read holds exactly one message.
+[[nodiscard]] bool is_address_change(std::byte const* buf, size_t len) noexcept
+{
+    auto hdr = rt_msghdr{};
+    if (len < offsetof(rt_msghdr, rtm_type) + sizeof(hdr.rtm_type))
+    {
+        return false;
+    }
+
+    std::memcpy(&hdr, buf, std::min(len, sizeof(hdr)));
+    return hdr.rtm_version == RTM_VERSION && (hdr.rtm_type == RTM_NEWADDR || hdr.rtm_type == RTM_DELADDR);
+}
+
+#else
+
+[[nodiscard]] tr_socket_t open_socket(int& /*err_out*/) noexcept
+{
+    return TR_BAD_SOCKET;
+}
+
+#endif
+
+void log_watch_failure([[maybe_unused]] int err)
+{
+#if defined(TR_WATCH_IPV6_NETLINK) || defined(TR_WATCH_IPV6_ROUTE_SOCKET)
+    // Info, not debug: on these platforms a failure usually means a sandbox
+    // (e.g. systemd's RestrictAddressFamilies=) blocks the socket family.
+    tr_logAddInfo(
+        fmt::format(
+            fmt::runtime(_("Couldn't watch for IPv6 address changes; relying on periodic checks: {error} ({error_code})")),
+            fmt::arg("error", tr_net_strerror(err)),
+            fmt::arg("error_code", err)));
+#else
+    tr_logAddDebug("No IPv6 address-change notifications on this platform; relying on periodic checks");
+#endif
+}
+} // namespace ipv6_address_watcher_helpers
+} // namespace
+
+tr_session::IPv6AddressWatcher::IPv6AddressWatcher(struct event_base* base, std::function<void()> on_change)
+    : on_change_{ std::move(on_change) }
+{
+    using namespace ipv6_address_watcher_helpers;
+
+    auto err = 0;
+    socket_ = open_socket(err);
+    if (!is_valid_socket(socket_))
+    {
+        log_watch_failure(err);
+        return;
+    }
+
+    auto const fd = static_cast<evutil_socket_t>(socket_);
+    if (evutil_make_socket_nonblocking(fd) != 0)
+    {
+        log_watch_failure(sockerrno);
+        tr_net_close_socket(socket_);
+        socket_ = TR_BAD_SOCKET;
+        return;
+    }
+    (void)evutil_make_socket_closeonexec(fd);
+
+    ev_.reset(tr::evhelpers::event_new_pri2(base, fd, EV_READ | EV_PERSIST, &IPv6AddressWatcher::on_can_read, this));
+    event_add(ev_.get(), nullptr);
+    tr_logAddDebug("Watching for IPv6 address changes");
+}
+
+tr_session::IPv6AddressWatcher::~IPv6AddressWatcher()
+{
+    ev_.reset();
+
+    if (is_valid_socket(socket_))
+    {
+        tr_net_close_socket(socket_);
+        socket_ = TR_BAD_SOCKET;
+    }
+}
+
+void tr_session::IPv6AddressWatcher::on_can_read([[maybe_unused]] evutil_socket_t fd, short /*what*/, void* vself)
+{
+#if defined(TR_WATCH_IPV6_NETLINK) || defined(TR_WATCH_IPV6_ROUTE_SOCKET)
+    using namespace ipv6_address_watcher_helpers;
+
+    auto buf = std::array<std::byte, 8192>{};
+    auto changed = false;
+    for (;;)
+    {
+        auto const n_read = recv(fd, std::data(buf), std::size(buf), 0);
+        if (n_read > 0)
+        {
+            changed = changed || is_address_change(std::data(buf), static_cast<size_t>(n_read));
+        }
+        else if (n_read < 0 && errno == ENOBUFS)
+        {
+            changed = true; // the kernel dropped messages, so one of them may have been a change
+        }
+        else
+        {
+            break; // EAGAIN: drained
+        }
+    }
+
+    if (changed)
+    {
+        static_cast<IPv6AddressWatcher*>(vself)->on_change_();
+    }
+#else
+    (void)vself;
+#endif
+}
+
+// ---
+
 tr_address tr_session::bind_address(tr_address_type type) const noexcept
 {
     if (type == TR_AF_INET)
@@ -822,6 +1021,33 @@ void tr_session::initImpl(init_data& data)
         fmt::format(fmt::runtime(_("Transmission version {version} starting")), fmt::arg("version", LONG_VERSION_STRING)));
 
     setSettings(settings, true);
+
+    // Each address event restarts this timer, so the refresh runs once the
+    // events have stopped for Ipv6ChangeSettleTime.
+    ipv6_change_timer_ = timerMaker().create(
+        [this]()
+        {
+            if (!ip_cache_->has_ip_protocol(TR_AF_INET6))
+            {
+                return;
+            }
+
+            if (ip_cache_->is_updating(TR_AF_INET6))
+            {
+                // update_addr() would return without refreshing anything
+                ipv6_change_timer_->start_single_shot(Ipv6ChangeSettleTime);
+                return;
+            }
+
+            ip_cache_->update_addr(TR_AF_INET6);
+        });
+    ipv6_address_watcher_.emplace(
+        event_base(),
+        [this]()
+        {
+            ipv6_change_timer_->stop(); // start_single_shot() leaves a running timer's deadline unchanged
+            ipv6_change_timer_->start_single_shot(Ipv6ChangeSettleTime);
+        });
 
     tr_utp_init(this);
 
@@ -1470,6 +1696,8 @@ void tr_session::closeImplPart1(std::promise<void>* closed_promise, std::chrono:
     lpd_.reset();
 
     port_forwarding_.reset();
+    ipv6_address_watcher_.reset();
+    ipv6_change_timer_.reset();
     bound_ipv6_.reset();
     bound_ipv4_.reset();
 
