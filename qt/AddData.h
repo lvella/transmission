@@ -15,14 +15,14 @@ class AddData
 {
 public:
     // what to do with the source file after adding the torrent
-    enum class FilenameDisposal
+    enum class FilenameDisposal : uint8_t
     {
         NoAction,
         Delete,
         Rename
     };
 
-    enum
+    enum Type : uint8_t
     {
         NONE,
         MAGNET,
@@ -38,11 +38,11 @@ public:
         set(str);
     }
 
-    int set(QString const&);
+    Type set(QString const& key);
 
-    QByteArray toBase64() const;
-    QString readableName() const;
-    QString readableShortName() const;
+    [[nodiscard]] QByteArray toBase64() const;
+    [[nodiscard]] QString readableName() const;
+    [[nodiscard]] QString readableShortName() const;
 
     void disposeSourceFile() const;
 
@@ -51,7 +51,7 @@ public:
         disposal_ = disposal;
     }
 
-    constexpr auto& fileDisposal() const noexcept
+    [[nodiscard]] constexpr auto& fileDisposal() const noexcept
     {
         return disposal_;
     }
@@ -66,7 +66,7 @@ public:
         return {};
     }
 
-    int type = NONE;
+    Type type = NONE;
     QByteArray metainfo;
     QString filename;
     QString magnet;

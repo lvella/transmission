@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include <map>
 #include <optional>
 #include <vector>
 
@@ -13,8 +12,6 @@
 #include <QFile>
 #include <QString>
 #include <QTimer>
-
-#include <libtransmission/tr-macros.h>
 
 #include "AddData.h" // AddData
 #include "BaseDialog.h"
@@ -37,16 +34,19 @@ extern "C"
 class OptionsDialog : public BaseDialog
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(OptionsDialog)
 
 public:
     OptionsDialog(Session& session, Prefs const& prefs, AddData addme, QWidget* parent = nullptr);
+    OptionsDialog& operator=(OptionsDialog&&) = delete;
+    OptionsDialog& operator=(OptionsDialog const&) = delete;
+    OptionsDialog(OptionsDialog&&) = delete;
+    OptionsDialog(OptionsDialog const&) = delete;
     ~OptionsDialog() override;
 
 private slots:
     void onAccepted();
-    void onPriorityChanged(file_indices_t const& file_indices, int);
-    void onWantedChanged(file_indices_t const& file_indices, bool);
+    void onPriorityChanged(file_indices_t const& file_indices, int priority);
+    void onWantedChanged(file_indices_t const& file_indices, bool is_wanted);
 
     void onSourceChanged();
     void onDestinationChanged();

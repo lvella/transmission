@@ -3,11 +3,6 @@
 // or any future license endorsed by Mnemosyne LLC.
 // License text can be found in the licenses/ folder.
 
-// _AppIndicatorClass::{fallback,unfallback} use deprecated GtkStatusIcon
-#undef GTK_DISABLE_DEPRECATED
-// We're using deprecated Gtk::StatusItem ourselves as well
-#undef GTKMM_DISABLE_DEPRECATED
-
 #include "SystemTrayIcon.h"
 
 #include "Actions.h"
@@ -49,18 +44,18 @@
 #endif
 
 using namespace std::literals;
-using namespace libtransmission::Values;
+using namespace tr::Values;
 
 namespace
 {
 
 #if !defined(TR_SYS_TRAY_IMPL_NONE)
-auto const TrayIconName = Glib::ustring("transmission-tray-icon"s);
-auto const AppIconName = Glib::ustring("transmission"s);
+char const* const TrayIconName = "transmission-tray-icon";
+char const* const AppIconName = "transmission";
 #endif
 
 #if defined(TR_SYS_TRAY_IMPL_APPINDICATOR)
-auto const AppName = Glib::ustring("transmission-gtk"s);
+char const* const AppName = "transmission-gtk";
 #endif
 
 } // namespace
@@ -69,14 +64,16 @@ class SystemTrayIcon::Impl
 {
 public:
     Impl(Gtk::Window& main_window, Glib::RefPtr<Session> const& core);
+    Impl(Impl&&) = delete;
+    Impl(Impl const&) = delete;
+    Impl& operator=(Impl&&) = delete;
+    Impl& operator=(Impl const&) = delete;
     ~Impl();
-
-    TR_DISABLE_COPY_MOVE(Impl)
 
     void refresh();
 
 private:
-    void activated();
+    static void activated();
     void popup(guint button, guint when);
 
     [[nodiscard]] std::string make_tooltip_text() const;
@@ -138,23 +135,11 @@ namespace
 
 Glib::ustring getIconName()
 {
-    Glib::ustring icon_name;
-
     // if the tray's icon is a 48x48 file, use it.
     // otherwise, use the fallback builtin icon.
-    if (auto theme = Gtk::IconTheme::get_default(); !theme->has_icon(TrayIconName))
-    {
-        icon_name = AppIconName;
-    }
-    else
-    {
-        auto const icon_info = theme->lookup_icon(TrayIconName, 48, Gtk::ICON_LOOKUP_USE_BUILTIN);
-        bool const icon_is_builtin = icon_info.get_filename().empty();
 
-        icon_name = icon_is_builtin ? AppIconName : TrayIconName;
-    }
-
-    return icon_name;
+    auto const icon = Gtk::IconTheme::get_default()->lookup_icon(TrayIconName, 48, Gtk::ICON_LOOKUP_USE_BUILTIN);
+    return icon && !icon.get_filename().empty() ? TrayIconName : AppIconName;
 }
 
 #endif
@@ -199,13 +184,13 @@ SystemTrayIcon::Impl::Impl([[maybe_unused]] Gtk::Window& main_window, Glib::RefP
 #endif
 
 #if defined(TR_SYS_TRAY_IMPL_APPINDICATOR)
-    indicator_ = app_indicator_new(AppName.c_str(), icon_name.c_str(), APP_INDICATOR_CATEGORY_SYSTEM_SERVICES);
+    indicator_ = app_indicator_new(AppName, icon_name.c_str(), APP_INDICATOR_CATEGORY_SYSTEM_SERVICES);
     app_indicator_set_status(indicator_, APP_INDICATOR_STATUS_ACTIVE);
     app_indicator_set_menu(indicator_, Glib::unwrap(menu_));
     app_indicator_set_title(indicator_, Glib::get_application_name().c_str());
 #elif defined(TR_SYS_TRAY_IMPL_STATUS_ICON)
     icon_ = Gtk::StatusIcon::create(icon_name);
-    icon_->signal_activate().connect(sigc::mem_fun(*this, &Impl::activated));
+    icon_->signal_activate().connect(&Impl::activated);
     icon_->signal_popup_menu().connect(sigc::mem_fun(*this, &Impl::popup));
 #endif
 }
@@ -214,7 +199,11 @@ std::string SystemTrayIcon::Impl::make_tooltip_text() const
 {
     auto const* const session = core_->get_session();
     return fmt::format(
-        _("{upload_speed} ▲ {download_speed} ▼"),
-        fmt::arg("upload_speed", Speed{ tr_sessionGetRawSpeed_KBps(session, TR_UP), Speed::Units::KByps }.to_string()),
-        fmt::arg("download_speed", Speed{ tr_sessionGetRawSpeed_KBps(session, TR_DOWN), Speed::Units::KByps }.to_string()));
+        fmt::runtime(_("{upload_speed} ▲ {download_speed} ▼")),
+        fmt::arg(
+            "upload_speed",
+            Speed{ tr_sessionGetRawSpeed_KBps(session, tr_direction::Up), Speed::Units::KByps }.to_string()),
+        fmt::arg(
+            "download_speed",
+            Speed{ tr_sessionGetRawSpeed_KBps(session, tr_direction::Down), Speed::Units::KByps }.to_string()));
 }

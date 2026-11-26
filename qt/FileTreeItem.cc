@@ -6,11 +6,9 @@
 #include <algorithm>
 #include <cassert>
 #include <utility>
+#include <ranges>
 
 #include <small/set.hpp>
-
-#include <QApplication>
-#include <QStyle>
 
 #include <libtransmission/transmission.h> // priorities
 
@@ -41,8 +39,8 @@ FileTreeItem::~FileTreeItem()
 
     // find the parent's reference to this child
     auto& siblings = parent_->children_;
-    auto it = std::find(std::begin(siblings), std::end(siblings), this);
-    if (it == std::end(siblings))
+    auto it = std::ranges::find(siblings, this);
+    if (it == std::ranges::end(siblings))
     {
         return;
     }
@@ -52,7 +50,7 @@ FileTreeItem::~FileTreeItem()
     it = siblings.erase(it);
 
     // invalidate the row numbers of the siblings that came after this child
-    parent_->first_unhashed_row_ = std::distance(std::begin(siblings), it);
+    parent_->first_unhashed_row_ = static_cast<int>(std::distance(std::begin(siblings), it));
 }
 
 void FileTreeItem::appendChild(FileTreeItem* child)
@@ -175,15 +173,9 @@ QVariant FileTreeItem::data(int column, int role) const
     case Qt::DecorationRole:
         if (column == FileTreeModel::COL_NAME)
         {
-            if (file_index_ < 0)
-            {
-                value = QApplication::style()->standardIcon(QStyle::SP_DirOpenIcon);
-            }
-            else
-            {
-                auto const& icon_cache = IconCache::get();
-                value = childCount() > 0 ? icon_cache.folderIcon() : icon_cache.guessMimeIcon(name(), icon_cache.fileIcon());
-            }
+            auto const& icon_cache = IconCache::get();
+            value = (file_index_ < 0 || childCount() > 0) ? icon_cache.folderIcon() :
+                                                            icon_cache.guessMimeIcon(name(), icon_cache.fileIcon());
         }
 
         break;

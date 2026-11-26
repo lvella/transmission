@@ -15,8 +15,13 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include <event2/event.h>
+
+#include <gtest/gtest.h>
+
+#include <libtransmission/transmission.h>
 
 #include <libtransmission/crypto-utils.h> // tr_base64_decode()
 #include <libtransmission/error.h>
@@ -27,8 +32,6 @@
 #include <libtransmission/utils.h>
 #include <libtransmission/variant.h>
 
-#include "gtest/gtest.h"
-
 using namespace std::literals;
 
 inline std::ostream& operator<<(std::ostream& os, tr_error const& err)
@@ -37,15 +40,12 @@ inline std::ostream& operator<<(std::ostream& os, tr_error const& err)
     return os;
 }
 
-namespace libtransmission
-{
-
-namespace test
+namespace tr::test
 {
 
 using file_func_t = std::function<void(char const* filename)>;
 
-static void depthFirstWalk(char const* path, file_func_t func)
+static void depthFirstWalk(char const* path, file_func_t const& func)
 {
     if (auto const info = tr_sys_path_get_info(path); info && info->isFolder())
     {
@@ -121,12 +121,21 @@ inline bool waitFor(
     }
 }
 
+class TransmissionTest : public ::testing::Test
+{
+protected:
+    static void SetUpTestSuite()
+    {
+        tr_lib_init();
+    }
+};
+
 class Sandbox
 {
 public:
     Sandbox()
-        : parent_dir_{ get_default_parent_dir() }
-        , sandbox_dir_{ create_sandbox(parent_dir_, "transmission-test-XXXXXX") }
+        : parent_dir_{ getDefaultParentDir() }
+        , sandbox_dir_{ createSandbox(parent_dir_, "transmission-test-XXXXXX") }
     {
     }
 
@@ -135,21 +144,26 @@ public:
         rimraf(sandbox_dir_);
     }
 
-    std::string const& path() const
+    Sandbox(Sandbox const&) = delete;
+    Sandbox(Sandbox&&) = delete;
+    Sandbox& operator=(Sandbox const&) = delete;
+    Sandbox& operator=(Sandbox&&) = delete;
+
+    [[nodiscard]] constexpr std::string const& path() const
     {
         return sandbox_dir_;
     }
 
-    static std::string create_sandbox(std::string const& parent_dir, std::string const& tmpl)
+    static std::string createSandbox(std::string const& parent_dir, std::string const& tmpl)
     {
-        auto path = fmt::format(FMT_STRING("{:s}/{:s}"sv), tr_sys_path_resolve(parent_dir), tmpl);
+        auto path = fmt::format("{:s}/{:s}"sv, tr_sys_path_resolve(parent_dir), tmpl);
         tr_sys_dir_create_temp(std::data(path));
         tr_sys_path_native_separators(std::data(path));
         return path;
     }
 
 protected:
-    static std::string get_default_parent_dir()
+    static std::string getDefaultParentDir()
     {
         if (auto* const path = getenv("TMPDIR"); path != nullptr)
         {
@@ -166,7 +180,7 @@ protected:
         {
             if (verbose)
             {
-                std::cerr << "cleanup: removing '" << filename << "'" << std::endl;
+                std::cerr << "cleanup: removing '" << filename << "'\n";
             }
 
             tr_sys_path_remove(filename);
@@ -180,15 +194,15 @@ private:
     std::string const sandbox_dir_;
 };
 
-class SandboxedTest : public ::testing::Test
+class SandboxedTest : public TransmissionTest
 {
 protected:
-    std::string sandboxDir() const
+    [[nodiscard]] std::string sandboxDir() const
     {
         return sandbox_.path();
     }
 
-    auto currentTestName() const
+    [[nodiscard]] static auto currentTestName()
     {
         auto const* i = ::testing::UnitTest::GetInstance()->current_test_info();
         auto child = std::string(i->test_suite_name());
@@ -197,13 +211,11 @@ protected:
         return child;
     }
 
-    void buildParentDir(std::string_view path) const
+    static void buildParentDir(std::string_view const path)
     {
         auto const tmperr = errno;
 
-        auto dir = tr_pathbuf{ path };
-        dir.popdir();
-        if (auto const info = tr_sys_path_get_info(path); !info)
+        if (auto const dir = tr_sys_path_dirname(path); !tr_sys_path_exists(dir))
         {
             auto error = tr_error{};
             tr_sys_dir_create(dir, TR_SYS_DIR_CREATE_PARENTS, 0700, &error);
@@ -237,7 +249,7 @@ protected:
         }
     }
 
-    void createTmpfileWithContents(char* tmpl, void const* payload, size_t n) const
+    static void createTmpfileWithContents(char* tmpl, void const* payload, size_t n)
     {
         auto const tmperr = errno;
 
@@ -260,7 +272,7 @@ protected:
         errno = tmperr;
     }
 
-    void createFileWithContents(std::string_view path, void const* payload, size_t n) const
+    static void createFileWithContents(std::string_view path, void const* payload, size_t n)
     {
         auto const tmperr = errno;
 
@@ -278,19 +290,19 @@ protected:
         errno = tmperr;
     }
 
-    void createFileWithContents(std::string_view path, std::string_view payload) const
+    static void createFileWithContents(std::string_view path, std::string_view payload)
     {
         createFileWithContents(path, std::data(payload), std::size(payload));
     }
 
-    void createFileWithContents(std::string_view path, void const* payload) const
+    static void createFileWithContents(std::string_view path, void const* payload)
     {
         createFileWithContents(path, payload, strlen(static_cast<char const*>(payload)));
     }
 
-    bool verbose = false;
+    bool verbose_ = false;
 
-    void sync() const
+    static void sync()
     {
 #ifndef _WIN32
         ::sync();
@@ -327,22 +339,13 @@ private:
         // blocklists
         tr_sys_dir_create(tr_pathbuf{ sandboxDir(), "/blocklists" }, TR_SYS_DIR_CREATE_PARENTS, 0700);
 
-        // fill in any missing settings
-        settings_map->try_emplace(TR_KEY_port_forwarding_enabled, false);
-        settings_map->try_emplace(TR_KEY_dht_enabled, false);
-        settings_map->try_emplace(TR_KEY_message_level, verbose ? TR_LOG_DEBUG : TR_LOG_ERROR);
+        applyQuietDefaults(*settings_map);
 
-        return tr_sessionInit(sandboxDir().data(), !verbose, settings);
-    }
-
-    void sessionClose(tr_session* session)
-    {
-        tr_sessionClose(session);
-        tr_logFreeQueue(tr_logGetQueue());
+        return tr_sessionInit(sandboxDir(), !verbose_, settings);
     }
 
 protected:
-    enum class ZeroTorrentState
+    enum class ZeroTorrentState : uint8_t
     {
         NoFiles,
         Partial,
@@ -421,16 +424,21 @@ protected:
                 auto const suffix = std::string_view{ partial ? ".part" : "" };
                 auto const filename = tr_pathbuf{ base, '/', subpath, suffix };
 
-                auto dirname = tr_pathbuf{ filename.sv() };
-                dirname.popdir();
-                tr_sys_dir_create(dirname, TR_SYS_DIR_CREATE_PARENTS, 0700);
+                tr_sys_dir_create(tr_sys_path_dirname(filename), TR_SYS_DIR_CREATE_PARENTS, 0700);
 
                 auto fd = tr_sys_file_open(filename, TR_SYS_FILE_WRITE | TR_SYS_FILE_CREATE | TR_SYS_FILE_TRUNCATE, 0600);
                 auto const file_size = metainfo->file_size(i);
-                for (uint64_t j = 0; j < file_size; ++j)
+                static auto constexpr BlockSize = uint64_t{ 524288U };
+                auto buf = std::vector<char>(BlockSize);
+                for (uint64_t j = 0; j < file_size;)
                 {
-                    auto const ch = partial && j < metainfo->piece_size() ? '\1' : '\0';
-                    tr_sys_file_write(fd, &ch, 1, nullptr);
+                    auto const piece_0_size = metainfo->piece_size(0U);
+                    auto const is_one = partial && j < piece_0_size;
+                    auto const n_write = std::min(BlockSize, (is_one ? piece_0_size : file_size) - j);
+                    auto const ch = is_one ? '\1' : '\0';
+                    std::fill_n(std::begin(buf), n_write, ch);
+                    tr_sys_file_write(fd, std::data(buf), n_write, nullptr);
+                    j += n_write;
                 }
 
                 tr_sys_file_close(fd);
@@ -457,6 +465,18 @@ protected:
         return tor;
     }
 
+    [[nodiscard]] tr_torrent* torrentInitFromFile(std::string_view filename)
+    {
+        auto* const ctor = tr_ctorNew(session_);
+
+        auto const path = tr_pathbuf{ LIBTRANSMISSION_TEST_ASSETS_DIR, '/', filename };
+        EXPECT_TRUE(ctor->set_metainfo_from_file(path));
+
+        auto* const tor = createTorrentAndWaitForVerifyDone(ctor);
+        tr_ctorFree(ctor);
+        return tor;
+    }
+
     void blockingTorrentVerify(tr_torrent* tor)
     {
         EXPECT_NE(nullptr, tor->session);
@@ -479,27 +499,61 @@ protected:
     {
         if (!settings_)
         {
-            auto* settings = new tr_variant{};
-            tr_variantInitDict(settings, 10);
-            settings_.reset(settings);
+            settings_ = std::make_shared<tr_variant>(tr_variant::make_map(10U));
         }
 
         return settings_.get();
     }
 
-    virtual void SetUp() override
+    // Fills in any missing setting with one that keeps a session quiet and off
+    // the network. Tests that start one of their own want the same treatment.
+    void applyQuietDefaults(tr_variant::Map& settings_map) const
+    {
+        settings_map.try_emplace(TR_KEY_port_forwarding_enabled, false);
+        settings_map.try_emplace(TR_KEY_dht_enabled, false);
+        settings_map.try_emplace(TR_KEY_message_level, verbose_ ? TR_LOG_DEBUG : TR_LOG_ERROR);
+        settings_map.insert_or_assign(TR_KEY_ip_endpoints_ipv4, tr_variant::Vector{});
+        settings_map.insert_or_assign(TR_KEY_ip_endpoints_ipv6, tr_variant::Vector{});
+    }
+
+    // Settings for a test that starts a second session, quieted the same way the
+    // fixture's own session is. Only the settings named here are set, so that
+    // the quiet ones are the ones missing for applyQuietDefaults() to fill in;
+    // tr_sessionInit() supplies the rest. The port is randomized so the two
+    // sessions do not contend for one.
+    [[nodiscard]] tr_variant quietSettings() const
+    {
+        auto settings = tr_variant::make_map();
+        auto* const settings_map = settings.get_if<tr_variant::Map>();
+        settings_map->insert_or_assign(TR_KEY_peer_port_random_on_start, true);
+        applyQuietDefaults(*settings_map);
+        return settings;
+    }
+
+    // Ends the fixture's session, releasing its hold on the config dir.
+    void closeSession()
+    {
+        static auto constexpr DeadlineSecs = 0.1;
+
+        if (session_ != nullptr)
+        {
+            tr_sessionClose(session_, DeadlineSecs);
+            session_ = nullptr;
+        }
+
+        tr_logClearQueue();
+    }
+
+    void SetUp() override
     {
         SandboxedTest::SetUp();
-
-        init_mgr_ = tr_lib_init();
 
         session_ = sessionInit(*settings());
     }
 
-    virtual void TearDown() override
+    void TearDown() override
     {
-        sessionClose(session_);
-        session_ = nullptr;
+        closeSession();
         settings_.reset();
 
         SandboxedTest::TearDown();
@@ -509,10 +563,6 @@ private:
     std::mutex verified_mutex_;
     std::condition_variable verified_cv_;
     std::vector<tr_torrent*> verified_;
-
-    std::unique_ptr<tr_net_init_mgr> init_mgr_;
 };
 
-} // namespace test
-
-} // namespace libtransmission
+} // namespace tr::test

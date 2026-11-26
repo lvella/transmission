@@ -11,8 +11,6 @@
 
 #include <QAbstractListModel>
 
-#include <libtransmission/tr-macros.h>
-
 #include "Torrent.h"
 #include "Typedefs.h"
 
@@ -27,15 +25,19 @@ extern "C"
 class TorrentModel : public QAbstractListModel
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(TorrentModel)
 
 public:
+    // NOLINTNEXTLINE(performance-enum-size)
     enum Role
     {
         TorrentRole = Qt::UserRole
     };
 
     explicit TorrentModel(Prefs const& prefs);
+    TorrentModel& operator=(TorrentModel&&) = delete;
+    TorrentModel& operator=(TorrentModel const&) = delete;
+    TorrentModel(TorrentModel&&) = delete;
+    TorrentModel(TorrentModel const&) = delete;
     ~TorrentModel() override;
     void clear();
 

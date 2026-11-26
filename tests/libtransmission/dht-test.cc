@@ -30,13 +30,14 @@
 
 #include <event2/event.h>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
+
+#include <gtest/gtest.h>
 
 #include <libtransmission/transmission.h>
 
 #include <libtransmission/crypto-utils.h> // tr_rand_obj
 #include <libtransmission/file.h>
-#include <libtransmission/log.h>
 #include <libtransmission/net.h>
 #include <libtransmission/quark.h>
 #include <libtransmission/session-thread.h> // for tr_evthread_init();
@@ -46,9 +47,8 @@
 #include <libtransmission/tr-macros.h>
 #include <libtransmission/tr-strbuf.h>
 #include <libtransmission/utils.h>
-#include <libtransmission/variant.h> // tr_variantDictAddRaw
+#include <libtransmission/variant.h>
 
-#include "gtest/gtest.h"
 #include "test-fixtures.h"
 
 #ifdef _WIN32
@@ -58,19 +58,16 @@
 
 using namespace std::literals;
 
-namespace libtransmission::test
+namespace tr::test
+{
+namespace
 {
 
 bool waitFor(struct event_base* event_base, std::chrono::milliseconds msec)
 {
-    return waitFor( //
-        event_base,
-        []() { return false; },
-        msec);
+    return tr::test::waitFor(event_base, []() { return false; }, msec);
 }
 
-namespace
-{
 auto constexpr IdLength = size_t{ 20U };
 auto constexpr MockTimerInterval = 40ms;
 
@@ -126,23 +123,22 @@ protected:
         {
             auto const dat_file = MockStateFile::filename(path);
 
-            auto dict = tr_variant{};
-            tr_variantInitDict(&dict, 3U);
-            tr_variantDictAddRaw(&dict, TR_KEY_id, std::data(id_), std::size(id_));
-            tr_variantDictAddInt(&dict, TR_KEY_id_timestamp, id_timestamp_);
+            auto map = tr_variant::Map{ 3U };
+            map.try_emplace(TR_KEY_id, tr_variant::make_raw(id_));
+            map.try_emplace(TR_KEY_id_timestamp, id_timestamp_);
             auto compact = std::vector<std::byte>{};
             for (auto const& socket_address : ipv4_nodes_)
             {
                 socket_address.to_compact(std::back_inserter(compact));
             }
-            tr_variantDictAddRaw(&dict, TR_KEY_nodes, std::data(compact), std::size(compact));
+            map.try_emplace(TR_KEY_nodes, tr_variant::make_raw(compact));
             compact.clear();
             for (auto const& socket_address : ipv6_nodes_)
             {
                 socket_address.to_compact(std::back_inserter(compact));
             }
-            tr_variantDictAddRaw(&dict, TR_KEY_nodes6, std::data(compact), std::size(compact));
-            tr_variant_serde::benc().to_file(dict, dat_file);
+            map.try_emplace(TR_KEY_nodes6, tr_variant::make_raw(compact));
+            tr_variant_serde::benc().to_file(tr_variant{ std::move(map) }, dat_file);
         }
     };
 
@@ -197,7 +193,7 @@ protected:
         {
             auto addrport = tr_socket_address::from_sockaddr(sa);
             assert(addrport);
-            pinged_.push_back(Pinged{ *addrport, tr_time() });
+            pinged_.push_back(Pinged{ .addrport = *addrport, .timestamp = tr_time() });
             return 0;
         }
 
@@ -205,7 +201,7 @@ protected:
         {
             auto info_hash = tr_sha1_digest_t{};
             std::copy_n(reinterpret_cast<std::byte const*>(id), std::size(info_hash), std::data(info_hash));
-            searched_.push_back(Searched{ info_hash, tr_port::from_host(port), af });
+            searched_.push_back(Searched{ .info_hash = info_hash, .port = tr_port::from_host(port), .af = af });
             return 0;
         }
 
@@ -270,7 +266,7 @@ protected:
     };
 
     // Creates real timers, but with shortened intervals so that tests can run faster
-    class MockTimer final : public libtransmission::Timer
+    class MockTimer final : public tr::Timer
     {
     public:
         explicit MockTimer(std::unique_ptr<Timer> real_timer)
@@ -318,7 +314,7 @@ protected:
     };
 
     // Creates MockTimers
-    class MockTimerMaker final : public libtransmission::TimerMaker
+    class MockTimerMaker final : public tr::TimerMaker
     {
     public:
         explicit MockTimerMaker(struct event_base* evb)
@@ -362,7 +358,7 @@ protected:
             return config_dir_;
         }
 
-        [[nodiscard]] libtransmission::TimerMaker& timer_maker() override
+        [[nodiscard]] tr::TimerMaker& timer_maker() override
         {
             return mock_timer_maker_;
         }
@@ -383,41 +379,9 @@ protected:
         MockTimerMaker mock_timer_maker_;
     };
 
-    [[nodiscard]] static tr_socket_address getSockaddr(std::string_view name, tr_port port)
-    {
-        auto hints = addrinfo{};
-        hints.ai_socktype = SOCK_DGRAM;
-        hints.ai_family = AF_UNSPEC;
-
-        auto const szname = tr_urlbuf{ name };
-        auto const port_str = std::to_string(port.host());
-        addrinfo* info = nullptr;
-        if (int const rc = getaddrinfo(szname.c_str(), std::data(port_str), &hints, &info); rc != 0)
-        {
-            tr_logAddWarn(fmt::format(
-                _("Couldn't look up '{address}:{port}': {error} ({error_code})"),
-                fmt::arg("address", name),
-                fmt::arg("port", port.host()),
-                fmt::arg("error", gai_strerror(rc)),
-                fmt::arg("error_code", rc)));
-            return {};
-        }
-
-        auto opt = tr_socket_address::from_sockaddr(info->ai_addr);
-        freeaddrinfo(info);
-        if (opt)
-        {
-            return *opt;
-        }
-
-        return {};
-    }
-
     void SetUp() override
     {
         SandboxedTest::SetUp();
-
-        init_mgr_ = tr_lib_init();
 
         tr_session_thread::tr_evthread_init();
         event_base_ = event_base_new();
@@ -432,8 +396,6 @@ protected:
     }
 
     struct event_base* event_base_ = nullptr;
-
-    std::unique_ptr<tr_net_init_mgr> init_mgr_;
 
     // Arbitrary values. Several tests requires socket/port values
     // to be provided but they aren't central to the tests, so they're
@@ -575,7 +537,7 @@ TEST_F(DhtTest, savesStateIfSwarmIsGood)
 {
     auto const state_file = MockStateFile{};
     auto const dat_file = MockStateFile::filename(sandboxDir());
-    EXPECT_FALSE(tr_sys_path_exists(dat_file.c_str()));
+    EXPECT_FALSE(tr_sys_path_exists(dat_file));
 
     {
         auto mediator = MockMediator{ event_base_ };
@@ -586,17 +548,17 @@ TEST_F(DhtTest, savesStateIfSwarmIsGood)
 
         // as dht goes out of scope,
         // it should save its state if the swarm is healthy
-        EXPECT_FALSE(tr_sys_path_exists(dat_file.c_str()));
+        EXPECT_FALSE(tr_sys_path_exists(dat_file));
     }
 
-    EXPECT_TRUE(tr_sys_path_exists(dat_file.c_str()));
+    EXPECT_TRUE(tr_sys_path_exists(dat_file));
 }
 
 TEST_F(DhtTest, doesNotSaveStateIfSwarmIsBad)
 {
     auto const state_file = MockStateFile{};
     auto const dat_file = MockStateFile::filename(sandboxDir());
-    EXPECT_FALSE(tr_sys_path_exists(dat_file.c_str()));
+    EXPECT_FALSE(tr_sys_path_exists(dat_file));
 
     {
         auto mediator = MockMediator{ event_base_ };
@@ -607,10 +569,10 @@ TEST_F(DhtTest, doesNotSaveStateIfSwarmIsBad)
 
         // as dht goes out of scope,
         // it should save its state if the swarm is healthy
-        EXPECT_FALSE(tr_sys_path_exists(dat_file.c_str()));
+        EXPECT_FALSE(tr_sys_path_exists(dat_file));
     }
 
-    EXPECT_FALSE(tr_sys_path_exists(dat_file.c_str()));
+    EXPECT_FALSE(tr_sys_path_exists(dat_file));
 }
 
 TEST_F(DhtTest, usesBootstrapFile)
@@ -618,7 +580,7 @@ TEST_F(DhtTest, usesBootstrapFile)
     // Make the 'dht.bootstrap' file.
     // This a file with each line holding `${host} ${port}`
     // which tr-dht will try to ping as nodes
-    static auto constexpr BootstrapNodeName = "example.com"sv;
+    static auto constexpr BootstrapNodeName = "91.121.74.28"sv;
     static auto constexpr BootstrapNodePort = tr_port::from_host(8080);
     if (auto ofs = std::ofstream{ tr_pathbuf{ sandboxDir(), "/dht.bootstrap" } }; ofs)
     {
@@ -634,12 +596,10 @@ TEST_F(DhtTest, usesBootstrapFile)
     // We didn't create a 'dht.dat' file to load state from,
     // so 'dht.bootstrap' should be the first nodes in the bootstrap list.
     // Confirm that BootstrapNodeName gets pinged first.
-    auto const expected = getSockaddr(BootstrapNodeName, BootstrapNodePort);
+    auto const expected = tr_socket_address{ tr_address::from_string(BootstrapNodeName).value_or(tr_address{}),
+                                             BootstrapNodePort };
     auto& pinged = mediator.mock_dht_.pinged_;
-    waitFor( //
-        event_base_,
-        [&pinged]() { return !std::empty(pinged); },
-        5s);
+    waitFor(event_base_, [&pinged]() { return !std::empty(pinged); }, 5s);
     ASSERT_EQ(1U, std::size(pinged));
     auto const [actual_addrport, time] = pinged.front();
     EXPECT_EQ(expected.address(), actual_addrport.address());
@@ -713,4 +673,4 @@ TEST_F(DhtTest, callsPeriodicPeriodically)
     EXPECT_NEAR(mock_dht.n_periodic_calls_, baseline + Periods, Periods / 2.0);
 }
 
-} // namespace libtransmission::test
+} // namespace tr::test

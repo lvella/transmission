@@ -7,15 +7,17 @@
 
 #include <QListView>
 
-#include <libtransmission/tr-macros.h>
-
 class TorrentView : public QListView
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(TorrentView)
 
 public:
     explicit TorrentView(QWidget* parent = nullptr);
+    ~TorrentView() override = default;
+    TorrentView(TorrentView&&) = delete;
+    TorrentView(TorrentView const&) = delete;
+    TorrentView& operator=(TorrentView&&) = delete;
+    TorrentView& operator=(TorrentView const&) = delete;
 
 public slots:
     void setHeaderText(QString const& text);

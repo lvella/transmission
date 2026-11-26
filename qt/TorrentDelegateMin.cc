@@ -25,14 +25,6 @@
 #include "TorrentModel.h"
 #include "Utils.h"
 
-enum
-{
-    GUI_PAD = 6,
-    BAR_WIDTH = 50,
-    BAR_HEIGHT = 16,
-    LINE_SPACING = 4
-};
-
 /***
 ****
 ****   +---------+-----------------------------------------------+
@@ -43,6 +35,9 @@ enum
 
 namespace
 {
+constexpr auto GuiPad = 6;
+constexpr auto BarWidth = 50;
+constexpr auto BarHeight = 16;
 
 class ItemLayout
 {
@@ -114,12 +109,12 @@ ItemLayout::ItemLayout(
     QSize const status_size(status_fm.size(0, status_text_));
 
     QStyleOptionProgressBar bar_style;
-    bar_style.rect = QRect{ 0, 0, BAR_WIDTH, BAR_HEIGHT };
+    bar_style.rect = QRect{ 0, 0, BarWidth, BarHeight };
     bar_style.maximum = 100;
     bar_style.progress = 100;
     bar_style.textVisible = true;
     QSize const bar_size(
-        bar_style.rect.width() * 2 - style->subElementRect(QStyle::SE_ProgressBarGroove, &bar_style).width(),
+        (bar_style.rect.width() * 2) - style->subElementRect(QStyle::SE_ProgressBarGroove, &bar_style).width(),
         bar_style.rect.height());
 
     QRect base_rect{ top_left,
@@ -132,13 +127,13 @@ ItemLayout::ItemLayout(
         emblem_icon.actualSize(icon_rect.size() / 2, QIcon::Normal, QIcon::On),
         icon_rect);
     bar_rect = QStyle::alignedRect(direction, Qt::AlignRight | Qt::AlignVCenter, bar_size, base_rect);
-    Utils::narrowRect(base_rect, icon_rect.width() + GUI_PAD, bar_rect.width() + GUI_PAD, direction);
+    Utils::narrowRect(base_rect, icon_rect.width() + GuiPad, bar_rect.width() + GuiPad, direction);
     status_rect = QStyle::alignedRect(
         direction,
         Qt::AlignRight | Qt::AlignVCenter,
         QSize{ status_size.width(), base_rect.height() },
         base_rect);
-    Utils::narrowRect(base_rect, 0, status_rect.width() + GUI_PAD, direction);
+    Utils::narrowRect(base_rect, 0, status_rect.width() + GuiPad, direction);
     name_rect = base_rect;
 }
 
@@ -153,7 +148,7 @@ QSize TorrentDelegateMin::sizeHint(QStyleOptionViewItem const& option, Torrent c
                                     option.font,
                                     option.direction,
                                     QPoint{},
-                                    option.rect.width() - m.width() * 2 };
+                                    option.rect.width() - (m.width() * 2) };
     return layout.size() + m * 2;
 }
 
@@ -217,7 +212,7 @@ void TorrentDelegateMin::drawTorrent(QPainter* painter, QStyleOptionViewItem con
     progress_bar_state |= QStyle::State_Small | QStyle::State_Horizontal;
 
     QIcon::Mode const emblem_im = is_item_selected ? QIcon::Selected : QIcon::Normal;
-    QIcon const emblem_icon = tor.hasError() ? getWarningEmblem() : QIcon{};
+    QIcon const emblem_icon = tor.hasError() ? warningEmblem() : QIcon{};
 
     // layout
     QSize const m(margin(*style));
@@ -270,7 +265,7 @@ void TorrentDelegateMin::drawTorrent(QPainter* painter, QStyleOptionViewItem con
     progress_bar_style_.textVisible = true;
     progress_bar_style_.textAlignment = Qt::AlignCenter;
     setProgressBarPercentDone(option, tor);
-    StyleHelper::drawProgressBar(*style, *painter, progress_bar_style_);
+    StyleHelper::drawProgressBar(*painter, progress_bar_style_);
 
     painter->restore();
 }

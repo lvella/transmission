@@ -26,7 +26,7 @@
 #include <memory>
 #include <utility>
 
-using namespace std::string_view_literals;
+using namespace std::literals;
 
 /****
 *****
@@ -36,28 +36,6 @@ namespace
 {
 
 auto const ShowOptionsDialogChoice = "show_options_dialog"sv; // TODO(C++20): Use ""s
-
-std::string get_source_file(tr_ctor& ctor)
-{
-    if (char const* source_file = tr_ctorGetSourceFile(&ctor); source_file != nullptr)
-    {
-        return source_file;
-    }
-
-    return "";
-}
-
-std::string get_download_dir(tr_ctor& ctor)
-{
-    char const* str = nullptr;
-    if (!tr_ctorGetDownloadDir(&ctor, TR_FORCE, &str))
-    {
-        g_assert_not_reached();
-    }
-
-    g_assert(str != nullptr);
-    return str;
-}
 
 } // namespace
 
@@ -73,9 +51,11 @@ public:
         Glib::RefPtr<Gtk::Builder> const& builder,
         Glib::RefPtr<Session> const& core,
         std::unique_ptr<tr_ctor, void (*)(tr_ctor*)> ctor);
-    ~Impl() = default;
-
-    TR_DISABLE_COPY_MOVE(Impl)
+    Impl(Impl&&) = delete;
+    Impl(Impl const&) = delete;
+    Impl& operator=(Impl&&) = delete;
+    Impl& operator=(Impl const&) = delete;
+    ~Impl();
 
 private:
     void sourceChanged(PathButton* b);
@@ -102,12 +82,17 @@ private:
     FreeSpaceLabel* freespace_label_ = nullptr;
 };
 
+OptionsDialog::Impl::~Impl()
+{
+    removeOldTorrent();
+}
+
 void OptionsDialog::Impl::removeOldTorrent()
 {
     if (tor_ != nullptr)
     {
         file_list_->clear();
-        tr_torrentRemove(tor_, false, nullptr, nullptr);
+        tr_torrentRemove(tor_, false);
         tor_ = nullptr;
     }
 }
@@ -133,10 +118,7 @@ void OptionsDialog::Impl::addResponseCB(int response)
             }
 
             gtr_save_recent_dir("download", core_, downloadDir_);
-        }
-        else if (response == TR_GTK_RESPONSE_TYPE(CANCEL))
-        {
-            removeOldTorrent();
+            tor_ = nullptr;
         }
     }
 
@@ -145,7 +127,7 @@ void OptionsDialog::Impl::addResponseCB(int response)
 
 void OptionsDialog::Impl::updateTorrent()
 {
-    bool const isLocalFile = tr_ctorGetSourceFile(ctor_.get()) != nullptr;
+    bool const isLocalFile = tr_ctorGetSourceFile(ctor_.get()).has_value();
     trash_check_->set_sensitive(isLocalFile);
 
     if (tor_ == nullptr)
@@ -155,7 +137,7 @@ void OptionsDialog::Impl::updateTorrent()
     }
     else
     {
-        tr_torrentSetDownloadDir(tor_, downloadDir_.c_str());
+        tr_torrentSetDownloadDir(tor_, downloadDir_);
         file_list_->set_sensitive(tr_torrentHasMetadata(tor_));
         file_list_->set_torrent(tr_torrentId(tor_));
         tr_torrentVerify(tor_);
@@ -181,11 +163,11 @@ void OptionsDialog::Impl::sourceChanged(PathButton* b)
         if (!filename.empty() && (filename_.empty() || !tr_sys_path_is_same(filename, filename_)))
         {
             filename_ = filename;
-            tr_ctorSetMetainfoFromFile(ctor_.get(), filename_.c_str(), nullptr);
+            tr_ctorSetMetainfoFromFile(ctor_.get(), filename_);
             new_file = true;
         }
 
-        tr_ctorSetDownloadDir(ctor_.get(), TR_FORCE, downloadDir_.c_str());
+        tr_ctorSetDownloadDir(ctor_.get(), TR_FORCE, downloadDir_);
         tr_ctorSetPaused(ctor_.get(), TR_FORCE, true);
         tr_ctorSetDeleteSource(ctor_.get(), false);
 
@@ -272,8 +254,8 @@ OptionsDialog::Impl::Impl(
     : dialog_(dialog)
     , core_(core)
     , ctor_(std::move(ctor))
-    , filename_(get_source_file(*ctor_))
-    , downloadDir_(get_download_dir(*ctor_))
+    , filename_{ tr_ctorGetSourceFile(ctor_.get()).value_or(""s) }
+    , downloadDir_{ tr_ctorGetDownloadDir(ctor_.get(), TR_FORCE).value_or(""s) }
     , file_list_(gtr_get_widget_derived<FileList>(builder, "files_view_scroll", "files_view", core_, 0))
     , run_check_(gtr_get_widget<Gtk::CheckButton>(builder, "start_check"))
     , trash_check_(gtr_get_widget<Gtk::CheckButton>(builder, "trash_check"))
@@ -427,16 +409,14 @@ TorrentUrlChooserDialog::TorrentUrlChooserDialog(
     set_transient_for(parent);
 
     auto* const e = gtr_get_widget<Gtk::Entry>(builder, "url_entry");
+    auto* const accept = get_widget_for_response(TR_GTK_RESPONSE_TYPE(ACCEPT));
     gtr_paste_clipboard_url_into_entry(*e);
 
-    signal_response().connect([this, e, core](int response) { onOpenURLResponse(response, *e, core); });
+#if GTKMM_CHECK_VERSION(4, 0, 0)
+    set_default_widget(*accept);
+#else
+    set_default(*accept);
+#endif
 
-    if (e->get_text_length() == 0)
-    {
-        e->grab_focus();
-    }
-    else
-    {
-        get_widget_for_response(TR_GTK_RESPONSE_TYPE(ACCEPT))->grab_focus();
-    }
+    signal_response().connect([this, e, core](int response) { onOpenURLResponse(response, *e, core); });
 }

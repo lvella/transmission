@@ -12,8 +12,6 @@
 #include <memory>
 #include <string_view>
 
-#include "libtransmission/transmission.h"
-
 #include "libtransmission/peer-common.h"
 
 using tr_peer_callback_webseed = tr_peer_callback_generic;
@@ -29,7 +27,7 @@ protected:
 public:
     [[nodiscard]] static std::unique_ptr<tr_webseed> create(
         tr_torrent& torrent,
-        std::string_view,
+        std::string_view url,
         tr_peer_callback_webseed callback,
         void* callback_data);
 

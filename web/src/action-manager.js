@@ -7,15 +7,23 @@ export class ActionManager extends EventTarget {
   constructor() {
     super();
     this.actions = Object.seal({
+      'copy-name': {
+        enabled: true,
+        text: 'Copy name',
+      },
       'deselect-all': {
         enabled: false,
         shortcut: 'D',
         text: 'Deselect all',
       },
-      'move-bottom': { enabled: false, text: 'Move to the back of the queue' },
-      'move-down': { enabled: false, text: 'Move down in the queue' },
-      'move-top': { enabled: false, text: 'Move to the front of the queue' },
-      'move-up': { enabled: false, text: 'Move up in the queue' },
+      'move-bottom': { enabled: false, text: 'Bottom' },
+      'move-down': { enabled: false, text: 'Down' },
+      'move-top': { enabled: false, text: 'Top' },
+      'move-up': { enabled: false, text: 'Up' },
+      'open-appearance-settings': {
+        enabled: true,
+        text: 'Appearance settings',
+      },
       'open-torrent': {
         enabled: true,
         shortcut: 'O',

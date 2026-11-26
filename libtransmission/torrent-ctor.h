@@ -16,11 +16,9 @@
 #include <string_view>
 #include <vector>
 
-#include "libtransmission/transmission.h"
-
 #include "libtransmission/torrent-metainfo.h"
 #include "libtransmission/torrent.h"
-#include "libtransmission/tr-macros.h"
+#include "libtransmission/types.h"
 
 struct tr_error;
 struct tr_session;
@@ -29,7 +27,7 @@ struct tr_torrent;
 struct tr_ctor
 {
 public:
-    explicit tr_ctor(tr_session* const session);
+    explicit tr_ctor(tr_session* session);
 
     [[nodiscard]] constexpr auto* session() const noexcept
     {
@@ -150,6 +148,7 @@ public:
     {
         return labels_;
     }
+
     void set_labels(tr_torrent::labels_t&& labels)
     {
         labels_ = std::move(labels);
@@ -162,7 +161,7 @@ public:
         return optional_args_[mode].paused_;
     }
 
-    TR_CONSTEXPR20 void set_paused(tr_ctorMode const mode, bool const paused)
+    constexpr void set_paused(tr_ctorMode const mode, bool const paused)
     {
         optional_args_[mode].paused_ = paused;
     }
@@ -174,7 +173,7 @@ public:
         return optional_args_[mode].peer_limit_;
     }
 
-    TR_CONSTEXPR20 void set_peer_limit(tr_ctorMode const mode, uint16_t const peer_limit)
+    constexpr void set_peer_limit(tr_ctorMode const mode, uint16_t const peer_limit)
     {
         optional_args_[mode].peer_limit_ = peer_limit;
     }
@@ -205,10 +204,34 @@ public:
         verify_done_callback_ = std::move(callback);
     }
 
+    // ---
+
+    [[nodiscard]] constexpr auto const& sequential_download(tr_ctorMode const mode) const noexcept
+    {
+        return optional_args_[mode].sequential_download_;
+    }
+
+    constexpr void set_sequential_download(tr_ctorMode const mode, bool const seq) noexcept
+    {
+        optional_args_[mode].sequential_download_ = seq;
+    }
+
+    [[nodiscard]] constexpr auto const& sequential_download_from_piece(tr_ctorMode const mode) const noexcept
+    {
+        return optional_args_[mode].sequential_download_from_piece_;
+    }
+
+    constexpr void set_sequential_download_from_piece(tr_ctorMode const mode, tr_piece_index_t const piece) noexcept
+    {
+        optional_args_[mode].sequential_download_from_piece_ = piece;
+    }
+
 private:
     struct OptionalArgs
     {
         std::optional<bool> paused_;
+        std::optional<bool> sequential_download_;
+        std::optional<tr_piece_index_t> sequential_download_from_piece_;
         std::optional<uint16_t> peer_limit_;
         std::string download_dir_;
     };
@@ -219,7 +242,7 @@ private:
 
     tr_torrent::VerifyDoneCallback verify_done_callback_;
 
-    tr_torrent::labels_t labels_ = {};
+    tr_torrent::labels_t labels_;
 
     std::vector<tr_file_index_t> wanted_;
     std::vector<tr_file_index_t> unwanted_;

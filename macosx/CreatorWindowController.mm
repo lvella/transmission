@@ -12,7 +12,7 @@
 
 #include <libtransmission/error.h>
 #include <libtransmission/makemeta.h>
-#include <libtransmission/utils.h>
+#include <libtransmission/string-utils.h>
 #include <libtransmission/web-utils.h> // tr_urlIsValidTracker()
 
 #import "CreatorWindowController.h"
@@ -24,7 +24,7 @@ typedef NS_ENUM(NSUInteger, TrackerSegmentTag) {
     TrackerSegmentTagRemove = 1,
 };
 
-@interface CreatorWindowController ()<NSWindowRestoration>
+@interface CreatorWindowController ()<NSWindowRestoration, NSMenuItemValidation>
 
 @property(nonatomic) IBOutlet NSImageView* fIconView;
 @property(nonatomic) IBOutlet NSTextField* fNameField;
@@ -333,7 +333,9 @@ static NSMutableSet* creatorWindowControllerSet;
 
             if (returnCode == NSAlertFirstButtonReturn)
             {
-                [self performSelectorOnMainThread:@selector(createReal) withObject:nil waitUntilDone:NO];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self createReal];
+                });
             }
         }];
     }
@@ -622,8 +624,11 @@ static NSMutableSet* creatorWindowControllerSet;
     self.fBuilder->set_source(self.fSource.stringValue.UTF8String);
 
     self.fFuture = self.fBuilder->make_checksums();
-    self.fTimer = [NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(checkProgress) userInfo:nil
-                                                  repeats:YES];
+
+    __weak __auto_type weakSelf = self;
+    self.fTimer = [NSTimer scheduledTimerWithTimeInterval:0.1 repeats:YES block:^(NSTimer* _Nonnull timer) {
+        [weakSelf checkProgress];
+    }];
 }
 
 - (void)checkProgress

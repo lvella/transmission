@@ -14,8 +14,7 @@
 #include <QTimer>
 #include <QWidget>
 
-#include <libtransmission/tr-macros.h>
-
+#include "Prefs.h"
 #include "Torrent.h"
 #include "Typedefs.h"
 
@@ -23,27 +22,30 @@ class QLabel;
 class QString;
 
 class FilterBarComboBox;
-class Prefs;
 class TorrentFilter;
 class TorrentModel;
 
 class FilterBar : public QWidget
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(FilterBar)
 
 public:
     FilterBar(Prefs& prefs, TorrentModel const& torrents, TorrentFilter const& filter, QWidget* parent = nullptr);
+    ~FilterBar() override = default;
+    FilterBar(FilterBar&&) = delete;
+    FilterBar(FilterBar const&) = delete;
+    FilterBar& operator=(FilterBar&&) = delete;
+    FilterBar& operator=(FilterBar const&) = delete;
 
 public slots:
     void clear();
 
 private:
-    FilterBarComboBox* createTrackerCombo(QStandardItemModel*);
+    FilterBarComboBox* createTrackerCombo(QStandardItemModel* model);
     FilterBarComboBox* createActivityCombo();
     void refreshTrackers();
 
-    enum
+    enum : uint8_t
     {
         ACTIVITY,
         TRACKERS,
@@ -66,7 +68,7 @@ private:
 
     small::map<QString, int> sitename_counts_;
     QTimer recount_timer_;
-    Pending pending_ = {};
+    Pending pending_;
     bool is_bootstrapping_ = {};
 
 private slots:
@@ -88,9 +90,9 @@ private slots:
         recountSoon(Pending().set(ACTIVITY).set(TRACKERS));
     }
 
-    void refreshPref(int key);
+    void refreshPref(tr_quark key);
     void onActivityIndexChanged(int index);
-    void onTextChanged(QString const&);
-    void onTorrentsChanged(torrent_ids_t const&, Torrent::fields_t const& fields);
+    void onTextChanged(QString const& str);
+    void onTorrentsChanged(torrent_ids_t const& ids, Torrent::fields_t const& fields);
     void onTrackerIndexChanged(int index);
 };

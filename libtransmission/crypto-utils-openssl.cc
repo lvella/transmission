@@ -10,7 +10,6 @@
 
 #include <array>
 #include <cstddef> // size_t
-#include <memory>
 
 #include <openssl/crypto.h>
 #include <openssl/err.h>
@@ -21,12 +20,12 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include "libtransmission/crypto-utils.h"
 #include "libtransmission/log.h"
 #include "libtransmission/tr-assert.h"
-#include "libtransmission/tr-macros.h" // tr_sha1_digest_t, tr_sha25...
+#include "libtransmission/types.h"
 #include "libtransmission/utils.h"
 
 #if !defined(WITH_OPENSSL)
@@ -62,7 +61,7 @@ void log_openssl_error(char const* file, int line)
         line,
         TR_LOG_ERROR,
         fmt::format(
-            _("{crypto_library} error: {error} ({error_code})"),
+            fmt::runtime(_("{crypto_library} error: {error} ({error_code})")),
             fmt::arg("crypto_library", "OpenSSL"),
             fmt::arg("error", std::data(buf)),
             fmt::arg("error_code", error_code)));
@@ -184,7 +183,7 @@ bool tr_x509_store_add(tr_x509_store_t handle, tr_x509_cert_t cert)
     return check_result(X509_STORE_add_cert(static_cast<X509_STORE*>(handle), static_cast<X509*>(cert)));
 }
 
-tr_x509_cert_t tr_x509_cert_new(void const* der, size_t der_length)
+tr_x509_cert_t tr_x509_cert_new(void const* der, long der_length)
 {
     TR_ASSERT(der != nullptr);
 

@@ -8,7 +8,6 @@
 #import "Controller.h"
 #import "FileListNode.h"
 #import "InfoOptionsViewController.h"
-#import "NSKeyedUnarchiverAdditions.h"
 #import "NSStringAdditions.h"
 #import "Torrent.h"
 #import "TorrentCell.h"
@@ -27,6 +26,29 @@ static NSInteger const kMaxGroup = 999999;
 static CGFloat const kErrorImageSize = 20.0;
 
 static NSTimeInterval const kToggleProgressSeconds = 0.175;
+
+@interface NSIndexSet (Transmission)
+- (NSIndexSet*)symmetricDifference:(NSIndexSet*)otherSet;
+@end
+
+@implementation NSIndexSet (Transmission)
+
+- (NSIndexSet*)symmetricDifference:(NSIndexSet*)otherSet
+{
+    NSMutableIndexSet* result = [self mutableCopy];
+    [result addIndexes:otherSet];
+
+    [self enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL*) {
+        if ([otherSet containsIndex:idx])
+        {
+            [result removeIndex:idx];
+        }
+    }];
+
+    return [result copy];
+}
+
+@end
 
 @interface TorrentTableView ()
 
@@ -49,6 +71,8 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
 
 @property(nonatomic) NSDictionary* fHoverEventDict;
 
+@property(nonatomic) NSMutableIndexSet* fPendingSelectionReloadRows;
+
 @end
 
 @implementation TorrentTableView
@@ -64,11 +88,10 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
         {
             _fCollapsedGroups = [NSKeyedUnarchiver unarchivedObjectOfClass:NSMutableIndexSet.class fromData:groupData error:nil];
         }
-        else if ((groupData = [_fDefaults dataForKey:@"CollapsedGroups"])) //handle old groups
+        else if ([_fDefaults objectForKey:@"CollapsedGroups"])
         {
-            _fCollapsedGroups = [[NSKeyedUnarchiver deprecatedUnarchiveObjectWithData:groupData] mutableCopy];
+            //ancient key that was read via unrestricted NSUnarchiver; discarded rather than read (GHSA-v7mp-fpv3-jf5r)
             [_fDefaults removeObjectForKey:@"CollapsedGroups"];
-            [self saveCollapsedGroups];
         }
         if (_fCollapsedGroups == nil)
         {
@@ -82,10 +105,7 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
 
         _piecesBarPercent = [_fDefaults boolForKey:@"PiecesBar"] ? 1.0 : 0.0;
 
-        if (@available(macOS 11.0, *))
-        {
-            self.style = NSTableViewStyleFullWidth;
-        }
+        self.style = NSTableViewStyleFullWidth;
     }
 
     return self;
@@ -126,8 +146,8 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
         NSMutableIndexSet* visibleIndexSet = [[NSMutableIndexSet alloc] init];
 
         [fullIndexSet enumerateIndexesUsingBlock:^(NSUInteger row, BOOL*) {
-            id rowView = [self rowViewAtRow:row makeIfNecessary:NO];
-            if ([rowView isGroupRowStyle])
+            id rowItem = [self itemAtRow:row];
+            if ([rowItem isKindOfClass:[TorrentGroup class]])
             {
                 [visibleIndexSet addIndex:row];
             }
@@ -152,8 +172,8 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
     //redraw fControlButton
     BOOL minimal = [self.fDefaults boolForKey:@"SmallView"];
     [rowIndexes enumerateIndexesUsingBlock:^(NSUInteger row, BOOL*) {
-        id rowView = [self rowViewAtRow:row makeIfNecessary:NO];
-        if (![rowView isGroupRowStyle])
+        id rowItem = [self itemAtRow:row];
+        if (![rowItem isKindOfClass:[TorrentGroup class]])
         {
             if (minimal)
             {
@@ -167,6 +187,11 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
             }
         }
     }];
+}
+
+- (BOOL)usesAlternatingRowBackgroundColors
+{
+    return ![self.fDefaults boolForKey:@"SmallView"];
 }
 
 - (BOOL)isGroupCollapsed:(NSInteger)value
@@ -202,11 +227,9 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
 
 - (BOOL)outlineView:(NSOutlineView*)outlineView isGroupItem:(id)item
 {
-    if ([item isKindOfClass:[Torrent class]])
-    {
-        return NO;
-    }
-    return YES;
+    // We are implementing our own group styling.
+    // Apple's default group styling conflicts with this.
+    return NO;
 }
 
 - (CGFloat)outlineView:(NSOutlineView*)outlineView heightOfRowByItem:(id)item
@@ -264,7 +287,7 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
             if (error)
             {
                 NSRect frame = torrentCell.fIconView.frame;
-                NSImage* resultImage = [[NSImage alloc] initWithSize:NSMakeSize(frame.size.height, frame.size.width)];
+                NSImage* resultImage = [[NSImage alloc] initWithSize:frame.size];
                 [resultImage lockFocus];
 
                 // draw fileImage
@@ -346,25 +369,14 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
         NSString* groupName = groupIndex != -1 ? [GroupsController.groups nameForIndex:groupIndex] :
                                                  NSLocalizedString(@"No Group", "Group table row");
 
-        NSInteger row = [self rowForItem:item];
-        if ([self isRowSelected:row])
-        {
-            NSMutableAttributedString* string = [[NSMutableAttributedString alloc] initWithString:groupName];
-            NSDictionary* attributes = @{
-                NSFontAttributeName : [NSFont boldSystemFontOfSize:11.0],
-                NSForegroundColorAttributeName : [NSColor labelColor]
-            };
-
-            [string addAttributes:attributes range:NSMakeRange(0, string.length)];
-            groupCell.fGroupTitleField.attributedStringValue = string;
-        }
-        else
-        {
-            groupCell.fGroupTitleField.stringValue = groupName;
-        }
+        groupCell.fGroupTitleField.stringValue = groupName;
 
         groupCell.fGroupDownloadField.stringValue = [NSString stringForSpeed:group.downloadRate];
         groupCell.fGroupDownloadView.image = [NSImage imageNamed:@"DownArrowGroupTemplate"];
+
+        NSString* tooltipDownload = NSLocalizedString(@"Download speed", "Torrent table -> group row -> tooltip");
+        groupCell.fGroupDownloadField.toolTip = tooltipDownload;
+        groupCell.fGroupDownloadView.toolTip = tooltipDownload;
 
         BOOL displayGroupRowRatio = [self.fDefaults boolForKey:@"DisplayGroupRowRatio"];
         groupCell.fGroupDownloadField.hidden = displayGroupRowRatio;
@@ -376,6 +388,10 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
             groupCell.fGroupUploadAndRatioView.image.accessibilityDescription = NSLocalizedString(@"Ratio", "Torrent -> status image");
 
             groupCell.fGroupUploadAndRatioField.stringValue = [NSString stringForRatio:group.ratio];
+
+            NSString* tooltipRatio = NSLocalizedString(@"Ratio", "Torrent table -> group row -> tooltip");
+            groupCell.fGroupUploadAndRatioField.toolTip = tooltipRatio;
+            groupCell.fGroupUploadAndRatioView.toolTip = tooltipRatio;
         }
         else
         {
@@ -383,7 +399,24 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
             groupCell.fGroupUploadAndRatioView.image.accessibilityDescription = NSLocalizedString(@"UL", "Torrent -> status image");
 
             groupCell.fGroupUploadAndRatioField.stringValue = [NSString stringForSpeed:group.uploadRate];
+
+            NSString* tooltipUpload = NSLocalizedString(@"Upload speed", "Torrent table -> group row -> tooltip");
+            groupCell.fGroupUploadAndRatioField.toolTip = tooltipUpload;
+            groupCell.fGroupUploadAndRatioView.toolTip = tooltipUpload;
         }
+
+        NSString* tooltipGroup;
+        NSUInteger count = group.torrents.count;
+        if (count == 1)
+        {
+            tooltipGroup = NSLocalizedString(@"1 transfer", "Torrent table -> group row -> tooltip");
+        }
+        else
+        {
+            tooltipGroup = NSLocalizedString(@"%lu transfers", "Torrent table -> group row -> tooltip");
+            tooltipGroup = [NSString localizedStringWithFormat:tooltipGroup, count];
+        }
+        groupCell.toolTip = tooltipGroup;
 
         return groupCell;
     }
@@ -403,46 +436,36 @@ static NSTimeInterval const kToggleProgressSeconds = 0.175;
     }
 }
 
-- (NSString*)outlineView:(NSOutlineView*)outlineView
-          toolTipForCell:(NSCell*)cell
-                    rect:(NSRectPointer)rect
-             tableColumn:(NSTableColumn*)column
-                    item:(id)item
-           mouseLocation:(NSPoint)mouseLocation
+- (void)outlineViewSelectionDidChange:(NSNotification*)notification
 {
-    NSString* ident = column.identifier;
-    if ([ident isEqualToString:@"DL"] || [ident isEqualToString:@"DL Image"])
+    NSIndexSet* oldSelection = self.fSelectedRowIndexes ?: [NSIndexSet indexSet];
+    NSIndexSet* newSelection = self.selectedRowIndexes;
+    self.fSelectedRowIndexes = newSelection;
+
+    NSIndexSet* changedRows = [oldSelection symmetricDifference:newSelection];
+    if (changedRows.count > 0)
     {
-        return NSLocalizedString(@"Download speed", "Torrent table -> group row -> tooltip");
-    }
-    else if ([ident isEqualToString:@"UL"] || [ident isEqualToString:@"UL Image"])
-    {
-        return [self.fDefaults boolForKey:@"DisplayGroupRowRatio"] ?
-            NSLocalizedString(@"Ratio", "Torrent table -> group row -> tooltip") :
-            NSLocalizedString(@"Upload speed", "Torrent table -> group row -> tooltip");
-    }
-    else if (ident)
-    {
-        NSUInteger count = ((TorrentGroup*)item).torrents.count;
-        if (count == 1)
+        if (!self.fPendingSelectionReloadRows)
         {
-            return NSLocalizedString(@"1 transfer", "Torrent table -> group row -> tooltip");
+            self.fPendingSelectionReloadRows = [[NSMutableIndexSet alloc] init];
+            [self performSelector:@selector(flushSelectionReload) withObject:nil afterDelay:0 inModes:@[ NSRunLoopCommonModes ]];
         }
-        else
-        {
-            return [NSString localizedStringWithFormat:NSLocalizedString(@"%lu transfers", "Torrent table -> group row -> tooltip"), count];
-        }
-    }
-    else
-    {
-        return nil;
+
+        [self.fPendingSelectionReloadRows addIndexes:changedRows];
     }
 }
 
-- (void)outlineViewSelectionDidChange:(NSNotification*)notification
+- (void)flushSelectionReload
 {
-    self.fSelectedRowIndexes = self.selectedRowIndexes;
-    [self reloadVisibleRows];
+    NSMutableIndexSet* rows = self.fPendingSelectionReloadRows;
+    self.fPendingSelectionReloadRows = nil;
+
+    NSInteger const numberOfRows = self.numberOfRows;
+    [rows removeIndexesInRange:NSMakeRange(numberOfRows, NSIntegerMax - numberOfRows)];
+    if (rows.count > 0)
+    {
+        [self reloadDataForRowIndexes:rows columnIndexes:[NSIndexSet indexSetWithIndex:0]];
+    }
 }
 
 - (void)outlineViewItemDidExpand:(NSNotification*)notification

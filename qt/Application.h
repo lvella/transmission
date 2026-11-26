@@ -10,21 +10,25 @@
 #include <unordered_set>
 
 #include <QApplication>
+#include <QPixmap>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QTimer>
 #include <QTranslator>
 #include <QWeakPointer>
 
-#include <libtransmission/tr-macros.h>
-#include <libtransmission/favicon-cache.h>
+#include <libtransmission-app/favicon-cache.h>
+#include <libtransmission/quark.h>
 
 #include "AddData.h"
+#include "Prefs.h"
 #include "Typedefs.h"
 #include "Utils.h" // std::hash<QString>
 
 class AddData;
 class MainWindow;
 class Prefs;
+class RpcClient;
 class Session;
 class Torrent;
 class TorrentModel;
@@ -33,18 +37,26 @@ class WatchDir;
 class Application : public QApplication
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(Application)
 
 public:
-    Application(int& argc, char** argv);
+    Application(
+        Prefs& prefs,
+        RpcClient& rpc,
+        bool minimized,
+        QString const& config_dir,
+        QStringList const& filenames,
+        int& argc,
+        char** argv);
+    Application(Application&&) = delete;
+    Application(Application const&) = delete;
+    Application& operator=(Application&&) = delete;
+    Application& operator=(Application const&) = delete;
+    ~Application() override;
 
     void raise() const;
     bool notifyApp(QString const& title, QString const& body, QStringList const& actions = {}) const;
 
-    QString const& intern(QString const& in)
-    {
-        return *interned_strings_.insert(in).first;
-    }
+    QString intern(QString const& in);
 
     [[nodiscard]] QPixmap find_favicon(QString const& sitename) const
     {
@@ -72,17 +84,17 @@ signals:
     void faviconsChanged();
 
 public slots:
-    void addTorrent(AddData) const;
+    void addTorrent(AddData addme) const;
     void addWatchdirTorrent(QString const& filename) const;
 
 private slots:
-    void consentGiven(int result) const;
     void onSessionSourceChanged() const;
     void onTorrentsAdded(torrent_ids_t const& torrent_ids) const;
     void onTorrentsCompleted(torrent_ids_t const& torrent_ids) const;
     void onTorrentsEdited(torrent_ids_t const& torrent_ids) const;
     void onTorrentsNeedInfo(torrent_ids_t const& torrent_ids) const;
-    void refreshPref(int key) const;
+    void pruneInternedStrings();
+    void refreshPref(tr_quark key) const;
     void refreshTorrents();
     void saveGeometry() const;
 #ifdef QT_DBUS_LIB
@@ -92,14 +104,12 @@ private slots:
 private:
     void maybeUpdateBlocklist() const;
     void loadTranslations();
-    void initUnits();
     QStringList getNames(torrent_ids_t const& ids) const;
-    void quitLater() const;
-    void notifyTorrentAdded(Torrent const*) const;
+    void notifyTorrentAdded(Torrent const* tor) const;
 
     std::unordered_set<QString> interned_strings_;
 
-    std::unique_ptr<Prefs> prefs_;
+    Prefs& prefs_;
     std::unique_ptr<Session> session_;
     std::unique_ptr<TorrentModel> model_;
     std::unique_ptr<MainWindow> window_;
@@ -107,22 +117,12 @@ private:
     QTimer model_timer_;
     QTimer stats_timer_;
     QTimer session_timer_;
+    QTimer intern_timer_;
     time_t last_full_update_time_ = {};
     QTranslator qt_translator_;
     QTranslator app_translator_;
 
-    FaviconCache<QPixmap> favicon_cache_;
-
-    QString const config_name_ = QStringLiteral("transmission");
-    QString const display_name_ = QStringLiteral("transmission-qt");
-
-#ifdef QT_DBUS_LIB
-    QString const fdo_notifications_service_name_ = QStringLiteral("org.freedesktop.Notifications");
-    QString const fdo_notifications_path_ = QStringLiteral("/org/freedesktop/Notifications");
-    QString const fdo_notifications_interface_name_ = QStringLiteral("org.freedesktop.Notifications");
-#endif
-
-    QRegularExpression const start_now_regex_{ QStringLiteral(R"rgx(start-now\((\d+)\))rgx") };
+    tr::app::FaviconCache<QPixmap> favicon_cache_;
 };
 
-#define trApp dynamic_cast<Application*>(Application::instance())
+#define trApp (dynamic_cast<Application*>(Application::instance()))

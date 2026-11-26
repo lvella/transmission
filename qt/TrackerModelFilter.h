@@ -7,17 +7,19 @@
 
 #include <QSortFilterProxyModel>
 
-#include <libtransmission/tr-macros.h>
-
 class TrackerModelFilter : public QSortFilterProxyModel
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(TrackerModelFilter)
 
 public:
     explicit TrackerModelFilter(QObject* parent = nullptr);
+    ~TrackerModelFilter() override = default;
+    TrackerModelFilter(TrackerModelFilter&&) = delete;
+    TrackerModelFilter(TrackerModelFilter const&) = delete;
+    TrackerModelFilter& operator=(TrackerModelFilter&&) = delete;
+    TrackerModelFilter& operator=(TrackerModelFilter const&) = delete;
 
-    void setShowBackupTrackers(bool);
+    void setShowBackupTrackers(bool b);
 
     [[nodiscard]] constexpr auto showBackupTrackers() const noexcept
     {
@@ -26,7 +28,7 @@ public:
 
 protected:
     // QSortFilterProxyModel
-    bool filterAcceptsRow(int source_row, QModelIndex const& source_parent) const override;
+    [[nodiscard]] bool filterAcceptsRow(int source_row, QModelIndex const& source_parent) const override;
 
 private:
     bool show_backups_ = {};

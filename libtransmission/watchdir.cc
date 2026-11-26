@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #define LIBTRANSMISSION_WATCHDIR_MODULE
 
@@ -21,7 +21,7 @@
 
 using namespace std::literals;
 
-namespace libtransmission
+namespace tr
 {
 namespace
 {
@@ -46,13 +46,14 @@ namespace
 
     auto error = tr_error{};
     auto const info = tr_sys_path_get_info(path, 0, &error);
-    if (error && !TR_ERROR_IS_ENOENT(error.code()))
+    if (error && !tr_error_is_enoent(error.code()))
     {
-        tr_logAddWarn(fmt::format(
-            _("Skipping '{path}': {error} ({error_code})"),
-            fmt::arg("path", path),
-            fmt::arg("error", error.message()),
-            fmt::arg("error_code", error.code())));
+        tr_logAddWarn(
+            fmt::format(
+                fmt::runtime(_("Skipping '{path}': {error} ({error_code})")),
+                fmt::arg("path", path),
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
     }
 
     return info && info->isFile();
@@ -65,7 +66,7 @@ namespace impl
 
 void BaseWatchdir::processFile(std::string_view basename)
 {
-    if (!isRegularFile(dirname_, basename) || handled_.count(basename) != 0)
+    if (!isRegularFile(dirname_, basename) || handled_.contains(basename))
     {
         return;
     }
@@ -88,7 +89,7 @@ void BaseWatchdir::processFile(std::string_view basename)
 
         if (now - info.first_kick_at > timeoutDuration())
         {
-            tr_logAddWarn(fmt::format(_("Couldn't add torrent file '{path}'"), fmt::arg("path", basename)));
+            tr_logAddWarn(fmt::format(fmt::runtime(_("Couldn't add torrent file '{path}'")), fmt::arg("path", basename)));
             pending_.erase(iter);
         }
         else
@@ -114,13 +115,14 @@ void BaseWatchdir::scan()
 
     if (error)
     {
-        tr_logAddWarn(fmt::format(
-            _("Couldn't read '{path}': {error} ({error_code})"),
-            fmt::arg("path", dirname()),
-            fmt::arg("error", error.message()),
-            fmt::arg("error_code", error.code())));
+        tr_logAddWarn(
+            fmt::format(
+                fmt::runtime(_("Couldn't read '{path}': {error} ({error_code})")),
+                fmt::arg("path", dirname()),
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
     }
 }
 
 } // namespace impl
-} // namespace libtransmission
+} // namespace tr

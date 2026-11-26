@@ -1,0 +1,169 @@
+// This file Copyright © Mnemosyne LLC.
+// It may be used under GPLv2 (SPDX: GPL-2.0-only), GPLv3 (SPDX: GPL-3.0-only),
+// or any future license endorsed by Mnemosyne LLC.
+// License text can be found in the licenses/ folder.
+
+#ifndef __TRANSMISSION__
+#error only libtransmission should #include this header.
+#endif
+
+#pragma once
+
+#include <array>
+#include <chrono> // std::chrono::milliseconds
+#include <memory> // std::unique_ptr
+#include <optional>
+#include <shared_mutex>
+#include <span>
+#include <string_view>
+#include <vector>
+
+#include "libtransmission/net.h"
+#include "libtransmission/timer.h"
+#include "libtransmission/web.h"
+
+/**
+ * Cache IP addresses.
+ *
+ * This class caches 3 useful info:
+ * 1. Whether your machine supports the IP protocol
+ * 2. Source address used for global connections
+ * 3. Global address (IPv4 public address/IPv6 global unicast address) retrieved
+ *    from HTTP IP query endpoints on the Internet.
+ *
+ * The idea is, if this class successfully cached a source address, that means
+ * your system is capable in that IP protocol. And if the global address is
+ * the same as the source address, then you are not behind a NAT.
+ *
+ * The global address cached in this class is not to be trusted 100%. Although
+ * uncommon, your BT packets might be routed differently than HTTP traffic such
+ * that your global address appears differently to other BT clients than the IP
+ * query services.
+ */
+class tr_ip_cache : public std::enable_shared_from_this<tr_ip_cache>
+{
+public:
+    struct Mediator
+    {
+        virtual ~Mediator() = default;
+
+        virtual void fetch(tr_web::FetchOptions&& /* options */)
+        {
+        }
+
+        [[nodiscard]] virtual std::string_view settings_bind_addr(tr_address_type /* type */)
+        {
+            return {};
+        }
+
+        [[nodiscard]] virtual std::span<std::string const> settings_ip_endpoint(tr_address_type /*type*/)
+        {
+            return {};
+        }
+
+        [[nodiscard]] virtual tr::TimerMaker& timer_maker() = 0;
+
+        // Called after the cached source address changes to a different address.
+        // Called without holding any ip-cache lock.
+        virtual void on_source_addr_changed(tr_address const& /* addr */)
+        {
+        }
+    };
+
+    static std::shared_ptr<tr_ip_cache> create(Mediator& mediator);
+
+    tr_ip_cache() = delete;
+    ~tr_ip_cache();
+    tr_ip_cache(tr_ip_cache const&) = delete;
+    tr_ip_cache(tr_ip_cache&&) = delete;
+    tr_ip_cache& operator=(tr_ip_cache const&) = delete;
+    tr_ip_cache& operator=(tr_ip_cache&&) = delete;
+
+    bool try_shutdown() noexcept;
+
+    [[nodiscard]] std::optional<tr_address> global_addr(tr_address_type type) const noexcept
+    {
+        auto const lock = std::shared_lock{ global_addr_mutex_[type] };
+        return global_addr_[type];
+    }
+
+    [[nodiscard]] std::optional<tr_address> source_addr(tr_address_type type) const noexcept
+    {
+        auto const lock = std::shared_lock{ source_addr_mutex_[type] };
+        return source_addr_[type];
+    }
+
+    [[nodiscard]] tr_address bind_addr(tr_address_type type) const noexcept;
+
+    bool set_global_addr(tr_address const& addr_new) noexcept;
+
+    void update_addr(tr_address_type type) noexcept;
+    void update_global_addr(tr_address_type type) noexcept;
+    void update_source_addr(tr_address_type type) noexcept;
+
+    // Only use as a callback for web_->fetch()
+    void on_response_ip_query(tr_address_type type, tr_web::FetchResponse const& response) noexcept;
+
+    // While true, update_addr() returns without doing anything.
+    [[nodiscard]] constexpr bool is_updating(tr_address_type type) const noexcept
+    {
+        return is_updating_[type] != is_updating_t::No;
+    }
+
+    [[nodiscard]] constexpr auto has_ip_protocol(tr_address_type type) const noexcept
+    {
+        return has_ip_protocol_[type];
+    }
+
+private:
+    template<typename T>
+    using array_ip_t = std::array<T, NUM_TR_AF_INET_TYPES>;
+
+    explicit tr_ip_cache(Mediator& mediator_in);
+
+    void unset_global_addr(tr_address_type type) noexcept;
+    void set_source_addr(tr_address const& addr_new) noexcept;
+    void unset_addr(tr_address_type type) noexcept;
+
+    void start_timer(tr_address_type type, std::chrono::milliseconds msec) noexcept
+    {
+        upkeep_timers_[type]->start_repeating(msec);
+    }
+
+    void stop_timer(tr_address_type type) noexcept
+    {
+        upkeep_timers_[type]->stop();
+    }
+
+    [[nodiscard]] bool set_is_updating(tr_address_type type, std::span<std::string const> ip_endpoints = {}) noexcept;
+    void unset_is_updating(tr_address_type type) noexcept;
+
+    Mediator& mediator_;
+
+    enum class is_updating_t : uint8_t
+    {
+        No = 0,
+        Yes,
+        Abort
+    };
+    array_ip_t<is_updating_t> is_updating_ = {};
+    array_ip_t<std::vector<std::string>> current_ip_endpoints_ = {};
+
+    // Never directly read/write IP addresses for the sake of being thread safe
+    // Use global_*_addr() for read, and set_*_addr()/unset_*_addr() for write instead
+    mutable array_ip_t<std::shared_mutex> global_addr_mutex_;
+    array_ip_t<std::optional<tr_address>> global_addr_;
+    mutable array_ip_t<std::shared_mutex> source_addr_mutex_;
+    array_ip_t<std::optional<tr_address>> source_addr_;
+    array_ip_t<bool> source_addr_checked_ = {};
+
+    // Keep the timer at the bottom of the class definition so that it will be destructed first
+    // We don't want it to trigger after the IP addresses have been destroyed
+    // (The destructor will acquire the IP address locks before proceeding, but still)
+    array_ip_t<std::unique_ptr<tr::Timer>> upkeep_timers_;
+
+    // Whether this machine supports this IP protocol
+    array_ip_t<bool> has_ip_protocol_ = { true, true };
+
+    array_ip_t<size_t> ix_service_ = {};
+};

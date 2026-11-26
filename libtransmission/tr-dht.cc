@@ -13,6 +13,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -30,9 +31,7 @@
 #include <netinet/in.h> /* sockaddr_in */
 #endif
 
-#include <fmt/core.h>
-
-#include "libtransmission/transmission.h"
+#include <fmt/format.h>
 
 #include "libtransmission/crypto-utils.h"
 #include "libtransmission/file.h"
@@ -72,7 +71,7 @@ extern "C"
         void const* v3,
         int len3)
     {
-        auto* setme = reinterpret_cast<std::byte*>(hash_return);
+        auto* setme = static_cast<std::byte*>(hash_return);
         std::fill_n(static_cast<char*>(hash_return), hash_size, '\0');
 
         auto const sv1 = std::string_view{ static_cast<char const*>(v1), size_t(len1) };
@@ -90,6 +89,7 @@ extern "C"
 
     int dht_sendto(int sockfd, void const* buf, int len, int flags, struct sockaddr const* to, int tolen)
     {
+        // NOLINTNEXTLINE(readability-redundant-casting)
         return static_cast<int>(sendto(sockfd, static_cast<char const*>(buf), len, flags, to, tolen));
     }
 
@@ -100,14 +100,25 @@ extern "C"
 
         auto const d = std::chrono::system_clock::now().time_since_epoch();
         auto const s = std::chrono::duration_cast<std::chrono::seconds>(d);
-        tv->tv_sec = s.count();
-        tv->tv_usec = std::chrono::duration_cast<std::chrono::microseconds>(d - s).count();
+        tv->tv_sec = static_cast<decltype(tv->tv_sec)>(s.count());
+        tv->tv_usec = static_cast<decltype(tv->tv_usec)>(std::chrono::duration_cast<std::chrono::microseconds>(d - s).count());
 
         return 0;
     }
 #endif
 
 } // extern "C"
+
+namespace
+{
+
+constexpr std::array<std::pair<char const*, uint16_t>, 3> const DefaultBootstraps = { {
+    { "dht.transmissionbt.com", 6881 },
+    { "router.bittorrent.com", 6881 },
+    { "dht.libtorrent.org", 25401 },
+} };
+
+}
 
 class tr_dht_impl final : public tr_dht
 {
@@ -142,10 +153,13 @@ public:
         init_state(state_filename_);
 
         get_nodes_from_bootstrap_file(tr_pathbuf{ mediator_.config_dir(), "/dht.bootstrap"sv }, bootstrap_queue_);
-        get_nodes_from_name("dht.transmissionbt.com", tr_port::from_host(6881), bootstrap_queue_);
+        for (auto const& [host, port] : DefaultBootstraps)
+        {
+            get_nodes_from_name(host, tr_port::from_host(port), bootstrap_queue_);
+        }
         bootstrap_timer_->start_single_shot(100ms);
 
-        mediator_.api().init(udp4_socket_, udp6_socket_, std::data(id_), nullptr);
+        mediator_.api().init(static_cast<int>(udp4_socket_), static_cast<int>(udp6_socket_), std::data(id_), nullptr);
 
         on_announce_timer();
         announce_timer_->start_repeating(1s);
@@ -221,7 +235,7 @@ private:
 
     [[nodiscard]] SwarmStatus swarm_status(int family, int* const setme_node_count = nullptr) const
     {
-        if (udp_socket(family) == TR_BAD_SOCKET)
+        if (!is_valid_socket(udp_socket(family)))
         {
             if (setme_node_count != nullptr)
             {
@@ -384,7 +398,7 @@ private:
             return candidate.socket_address.port_ == tr_port::from_host(1);
         };
 
-        pex.erase(std::remove_if(std::begin(pex), std::end(pex), IsBadPex), std::end(pex));
+        std::erase_if(pex, IsBadPex);
         return std::move(pex);
     }
 
@@ -424,10 +438,9 @@ private:
         auto const n = mediator_.api().get_nodes(std::data(sins4), &num4, std::data(sins6), &num6);
         tr_logAddTrace(fmt::format("Saving {} ({} + {}) nodes", n, num4, num6));
 
-        tr_variant benc;
-        tr_variantInitDict(&benc, 4);
-        tr_variantDictAddRaw(&benc, TR_KEY_id, std::data(id_), std::size(id_));
-        tr_variantDictAddInt(&benc, TR_KEY_id_timestamp, id_timestamp_);
+        auto benc = tr_variant::Map{ 4U };
+        benc[TR_KEY_id] = tr_variant::make_raw(std::data(id_), std::size(id_));
+        benc[TR_KEY_id_timestamp] = id_timestamp_;
 
         if (num4 > 0)
         {
@@ -441,7 +454,7 @@ private:
                 out += PortLen;
             }
 
-            tr_variantDictAddRaw(&benc, TR_KEY_nodes, std::data(compact), out - std::data(compact));
+            benc[TR_KEY_nodes] = tr_variant::make_raw(std::data(compact), out - std::data(compact));
         }
 
         if (num6 > 0)
@@ -456,20 +469,20 @@ private:
                 out6 += PortLen;
             }
 
-            tr_variantDictAddRaw(&benc, TR_KEY_nodes6, std::data(compact6), out6 - std::data(compact6));
+            benc[TR_KEY_nodes6] = tr_variant::make_raw(std::data(compact6), out6 - std::data(compact6));
         }
 
-        tr_variant_serde::benc().to_file(benc, state_filename_);
+        tr_variant_serde::benc().to_file(tr_variant{ std::move(benc) }, state_filename_);
     }
 
-    void init_state(std::string_view filename)
+    void init_state(std::string_view const filename)
     {
         // Note that DHT ids need to be distributed uniformly,
         // so it should be something truly random
         id_ = tr_rand_obj<Id>();
         id_timestamp_ = tr_time();
 
-        if (!tr_sys_path_exists(std::data(filename)))
+        if (!tr_sys_path_exists(filename))
         {
             return;
         }
@@ -485,23 +498,25 @@ private:
         static auto constexpr IdTtl = time_t{ 30 * 24 * 60 * 60 }; // 30 days
 
         auto& top = *otop;
-
-        if (auto t = int64_t{}; tr_variantDictFindInt(&top, TR_KEY_id_timestamp, &t) && t + IdTtl > id_timestamp_)
+        auto* const top_map = top.get_if<tr_variant::Map>();
+        if (top_map == nullptr)
         {
-            if (auto sv = std::string_view{};
-                tr_variantDictFindStrView(&top, TR_KEY_id, &sv) && std::size(sv) == std::size(id_))
+            return;
+        }
+
+        if (auto t_opt = top_map->value_if<int64_t>(TR_KEY_id_timestamp); t_opt && *t_opt + IdTtl > id_timestamp_)
+        {
+            if (auto sv_opt = top_map->value_if<std::string_view>(TR_KEY_id); sv_opt && sv_opt->size() == id_.size())
             {
-                id_timestamp_ = t;
-                std::copy(std::begin(sv), std::end(sv), std::begin(id_));
+                id_timestamp_ = *t_opt;
+                std::ranges::copy(*sv_opt, std::begin(id_));
             }
         }
 
-        size_t raw_len = 0U;
-        std::byte const* raw = nullptr;
-        if (tr_variantDictFindRaw(&top, TR_KEY_nodes, &raw, &raw_len) && raw_len % CompactLen == 0)
+        if (auto sv_opt = top_map->value_if<std::string_view>(TR_KEY_nodes); sv_opt && sv_opt->size() % CompactLen == 0)
         {
-            auto* walk = raw;
-            auto const* const end = raw + raw_len;
+            auto const* walk = reinterpret_cast<std::byte const*>(sv_opt->data());
+            auto const* const end = walk + sv_opt->size();
             while (walk < end)
             {
                 auto addr = tr_address{};
@@ -512,10 +527,10 @@ private:
             }
         }
 
-        if (tr_variantDictFindRaw(&top, TR_KEY_nodes6, &raw, &raw_len) && raw_len % Compact6Len == 0)
+        if (auto sv_opt = top_map->value_if<std::string_view>(TR_KEY_nodes6); sv_opt && sv_opt->size() % Compact6Len == 0)
         {
-            auto* walk = raw;
-            auto const* const end = raw + raw_len;
+            auto const* walk = reinterpret_cast<std::byte const*>(sv_opt->data());
+            auto const* const end = walk + sv_opt->size();
             while (walk < end)
             {
                 auto addr = tr_address{};
@@ -548,10 +563,11 @@ private:
 
             if (line_stream.bad() || std::empty(addrstr))
             {
-                tr_logAddWarn(fmt::format(
-                    _("Couldn't parse '{filename}' line: '{line}'"),
-                    fmt::arg("filename", filename),
-                    fmt::arg("line", line)));
+                tr_logAddWarn(
+                    fmt::format(
+                        fmt::runtime(_("Couldn't parse '{filename}' line: '{line}'")),
+                        fmt::arg("filename", filename),
+                        fmt::arg("line", line)));
             }
             else
             {
@@ -572,12 +588,13 @@ private:
         addrinfo* info = nullptr;
         if (int const rc = getaddrinfo(name, port_str.c_str(), &hints, &info); rc != 0)
         {
-            tr_logAddWarn(fmt::format(
-                _("Couldn't look up '{address}:{port}': {error} ({error_code})"),
-                fmt::arg("address", name),
-                fmt::arg("port", port_in.host()),
-                fmt::arg("error", gai_strerror(rc)),
-                fmt::arg("error_code", rc)));
+            tr_logAddWarn(
+                fmt::format(
+                    fmt::runtime(_("Couldn't look up '{address}:{port}': {error} ({error_code})")),
+                    fmt::arg("address", name),
+                    fmt::arg("port", port_in.host()),
+                    fmt::arg("error", gai_strerror(rc)),
+                    fmt::arg("error_code", rc)));
             return;
         }
 
@@ -600,9 +617,9 @@ private:
 
     Mediator& mediator_;
     std::string const state_filename_;
-    std::unique_ptr<libtransmission::Timer> const announce_timer_;
-    std::unique_ptr<libtransmission::Timer> const bootstrap_timer_;
-    std::unique_ptr<libtransmission::Timer> const periodic_timer_;
+    std::unique_ptr<tr::Timer> const announce_timer_;
+    std::unique_ptr<tr::Timer> const bootstrap_timer_;
+    std::unique_ptr<tr::Timer> const periodic_timer_;
 
     Id id_ = {};
     int64_t id_timestamp_ = {};

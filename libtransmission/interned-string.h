@@ -5,9 +5,11 @@
 
 #pragma once
 
+#include <algorithm>
+#include <compare>
 #include <string_view>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include "libtransmission/quark.h"
 
@@ -31,15 +33,13 @@ public:
     }
 
     explicit tr_interned_string(char const* c_str)
-        : tr_interned_string{ std::string_view{ c_str ? c_str : "" } }
+        : tr_interned_string{ std::string_view{ c_str != nullptr ? c_str : "" } }
     {
     }
 
     tr_interned_string& operator=(tr_quark quark)
     {
-        quark_ = quark;
-        sv_ = tr_quark_get_string_view(quark_);
-        return *this;
+        return (*this = tr_interned_string{ quark });
     }
 
     tr_interned_string& operator=(std::string_view sv)
@@ -62,14 +62,14 @@ public:
         return sv_;
     }
 
-    [[nodiscard]] constexpr char const* c_str() const noexcept
-    {
-        return std::data(sv()); // tr_quark strs are always zero-terminated
-    }
-
     [[nodiscard]] constexpr auto data() const noexcept
     {
         return std::data(sv());
+    }
+
+    [[nodiscard]] char const* c_str() const noexcept
+    {
+        return data(); // tr_quark strs are always zero-terminated
     }
 
     [[nodiscard]] constexpr auto empty() const noexcept
@@ -106,65 +106,33 @@ public:
         return std::rend(sv());
     }
 
-    [[nodiscard]] constexpr auto compare(tr_interned_string const& that) const noexcept // <=>
+    [[nodiscard]] constexpr auto operator<=>(tr_interned_string const& that) const noexcept
     {
-        if (this->quark() < that.quark())
-        {
-            return -1;
-        }
-
-        if (this->quark() > that.quark())
-        {
-            return 1;
-        }
-
-        return 0;
+        return this->quark() <=> that.quark();
     }
-
-    [[nodiscard]] constexpr bool operator<(tr_interned_string const& that) const noexcept
-    {
-        return this->compare(that) < 0;
-    }
-
-    [[nodiscard]] constexpr bool operator>(tr_interned_string const& that) const noexcept
-    {
-        return this->compare(that) > 0;
-    }
-
     [[nodiscard]] constexpr bool operator==(tr_interned_string const& that) const noexcept
     {
-        return this->compare(that) == 0;
-    }
-    [[nodiscard]] constexpr bool operator!=(tr_interned_string const& that) const noexcept
-    {
-        return this->compare(that) != 0;
+        return (*this <=> that) == 0;
     }
 
-    [[nodiscard]] constexpr auto operator==(std::string_view that) const noexcept
+    [[nodiscard]] constexpr auto operator<=>(std::string_view that) const noexcept
     {
-        return sv() == that;
+        return std::lexicographical_compare_three_way(begin(), end(), that.begin(), that.end());
     }
-    [[nodiscard]] constexpr auto operator!=(std::string_view that) const noexcept
+    [[nodiscard]] constexpr bool operator==(std::string_view that) const noexcept
     {
-        return sv() != that;
-    }
-    [[nodiscard]] constexpr bool operator==(char const* that) const noexcept
-    {
-        return *this == std::string_view{ that != nullptr ? that : "" };
-    }
-    [[nodiscard]] constexpr bool operator!=(char const* that) const noexcept
-    {
-        return *this != std::string_view{ that != nullptr ? that : "" };
+        return std::ranges::equal(*this, that);
     }
 
-    [[nodiscard]] constexpr operator std::string_view() const noexcept
+    // NOLINTNEXTLINE(google-explicit-constructor)
+    [[nodiscard]] operator std::string_view() const noexcept
     {
         return sv();
     }
 
 private:
     tr_quark quark_ = TR_KEY_NONE;
-    std::string_view sv_ = "";
+    std::string_view sv_;
 };
 
 template<>

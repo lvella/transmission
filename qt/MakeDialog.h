@@ -7,7 +7,6 @@
 
 #include <optional>
 
-#include <libtransmission/tr-macros.h>
 #include <libtransmission/makemeta.h>
 
 #include "BaseDialog.h"
@@ -19,23 +18,27 @@ class Session;
 class MakeDialog : public BaseDialog
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(MakeDialog)
 
 public:
-    MakeDialog(Session&, QWidget* parent = nullptr);
+    explicit MakeDialog(Session& session, QWidget* parent = nullptr);
+    ~MakeDialog() override = default;
+    MakeDialog(MakeDialog&&) = delete;
+    MakeDialog(MakeDialog const&) = delete;
+    MakeDialog& operator=(MakeDialog&&) = delete;
+    MakeDialog& operator=(MakeDialog const&) = delete;
 
 protected:
     // QWidget
-    void dragEnterEvent(QDragEnterEvent*) override;
-    void dropEvent(QDropEvent*) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private slots:
     void onSourceChanged();
     void makeTorrent();
-    void onPieceSizeUpdated(int);
+    void onPieceSizeUpdated(int value);
 
 private:
-    QString getSource() const;
+    [[nodiscard]] QString getSource() const;
     void updatePiecesLabel();
     Session& session_;
 

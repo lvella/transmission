@@ -7,21 +7,23 @@
 
 #include <QToolButton>
 
-#include <libtransmission/tr-macros.h>
-
 class PathButton : public QToolButton
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(PathButton)
 
 public:
-    enum Mode
+    enum Mode : uint8_t
     {
         DirectoryMode,
         FileMode
     };
 
     explicit PathButton(QWidget* parent = nullptr);
+    ~PathButton() override = default;
+    PathButton(PathButton&&) = delete;
+    PathButton(PathButton const&) = delete;
+    PathButton& operator=(PathButton&&) = delete;
+    PathButton& operator=(PathButton const&) = delete;
 
     void setMode(Mode mode);
     void setTitle(QString const& title);
@@ -35,7 +37,7 @@ public:
     }
 
     // QWidget
-    QSize sizeHint() const override;
+    [[nodiscard]] QSize sizeHint() const override;
 
 signals:
     void pathChanged(QString const& path);
@@ -51,8 +53,8 @@ private slots:
 private:
     void updateAppearance();
 
-    bool isDirMode() const;
-    QString effectiveTitle() const;
+    [[nodiscard]] bool isDirMode() const;
+    [[nodiscard]] QString effectiveTitle() const;
 
     QString name_filter_;
     QString path_;

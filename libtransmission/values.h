@@ -8,15 +8,16 @@
 #include <array>
 #include <cstddef> // size_t
 #include <cmath> // for std::fabs(), std::floor()
+#include <compare>
 #include <cstdint> // for uint64_t
 #include <string>
 #include <string_view>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
-namespace libtransmission::Values
+namespace tr::Values
 {
-enum class MemoryUnits
+enum class MemoryUnits : uint8_t
 {
     Bytes,
     KBytes,
@@ -27,7 +28,7 @@ enum class MemoryUnits
 
 using StorageUnits = MemoryUnits;
 
-enum class SpeedUnits
+enum class SpeedUnits : uint8_t
 {
     Byps,
     KByps,
@@ -38,7 +39,7 @@ enum class SpeedUnits
 
 struct Config
 {
-    enum class Base
+    enum class Base : uint16_t
     {
         Kilo = 1000U,
         Kibi = 1024U
@@ -47,8 +48,8 @@ struct Config
     template<typename UnitsEnum>
     struct Units
     {
-        template<typename... Names>
-        Units(Base base, Names... names) noexcept
+        template<typename... Names> // NOLINTNEXTLINE(google-explicit-constructor, cppcoreguidelines-pro-type-member-init)
+        Units(Base base, Names... names)
         {
             set_base(base);
 
@@ -96,12 +97,12 @@ struct Config
 
         std::array<std::array<char, 32>, 5> display_names_ = {};
         std::array<uint64_t, 5> multipliers_;
-        Base base_;
+        Base base_ = {};
     };
 
-    static Units<MemoryUnits> Memory;
-    static Units<SpeedUnits> Speed;
-    static Units<StorageUnits> Storage;
+    static Units<MemoryUnits> memory;
+    static Units<SpeedUnits> speed;
+    static Units<StorageUnits> storage;
 };
 
 template<typename UnitsEnum, Config::Units<UnitsEnum> const& units_>
@@ -174,37 +175,11 @@ public:
         return ret /= mult;
     }
 
-    [[nodiscard]] constexpr auto operator<(Value const& that) const noexcept
-    {
-        return compare(that) < 0;
-    }
+    [[nodiscard]] constexpr auto operator<=>(Value const& that) const noexcept = default;
 
-    [[nodiscard]] constexpr auto operator<=(Value const& that) const noexcept
-    {
-        return compare(that) <= 0;
-    }
+    [[nodiscard]] constexpr bool operator==(Value const& that) const noexcept = default;
 
-    [[nodiscard]] constexpr auto operator==(Value const& that) const noexcept
-    {
-        return compare(that) == 0;
-    }
-
-    [[nodiscard]] constexpr auto operator!=(Value const& that) const noexcept
-    {
-        return compare(that) != 0;
-    }
-
-    [[nodiscard]] constexpr auto operator>(Value const& that) const noexcept
-    {
-        return compare(that) > 0;
-    }
-
-    [[nodiscard]] constexpr auto operator>=(Value const& that) const noexcept
-    {
-        return compare(that) >= 0;
-    }
-
-    std::string_view to_string(char* buf, size_t buflen) const noexcept
+    std::string_view to_string(char* buf, size_t buflen) const
     {
         auto idx = size_t{ 0 };
         auto val = 1.0 * base_quantity_;
@@ -246,25 +221,10 @@ public:
 
 private:
     uint64_t base_quantity_ = {};
-
-    [[nodiscard]] constexpr int compare(Value const& that) const noexcept // <=>
-    {
-        if (base_quantity_ < that.base_quantity_)
-        {
-            return -1;
-        }
-
-        if (base_quantity_ > that.base_quantity_)
-        {
-            return 1;
-        }
-
-        return 0;
-    }
 };
 
-using Memory = Value<MemoryUnits, Config::Memory>;
-using Storage = Value<StorageUnits, Config::Storage>;
-using Speed = Value<SpeedUnits, Config::Speed>;
+using Memory = Value<MemoryUnits, Config::memory>;
+using Storage = Value<StorageUnits, Config::storage>;
+using Speed = Value<SpeedUnits, Config::speed>;
 
-} // namespace libtransmission::Values
+} // namespace tr::Values

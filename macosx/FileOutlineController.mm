@@ -6,7 +6,9 @@
 #import "Torrent.h"
 #import "FileListNode.h"
 #import "FileOutlineView.h"
-#import "FilePriorityCell.h"
+#import "BaseFileNameCellView.h"
+#import "FilePriorityCellView.h"
+#import "FileCheckCellView.h"
 #import "FileRenameSheetController.h"
 #import "NSMutableArrayAdditions.h"
 #import "NSStringAdditions.h"
@@ -24,7 +26,7 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     FilePriorityMenuTagLow
 };
 
-@interface FileOutlineController ()
+@interface FileOutlineController ()<NSOutlineViewDelegate, NSOutlineViewDataSource, NSMenuItemValidation>
 
 @property(nonatomic) NSMutableArray<FileListNode*>* fFileList;
 
@@ -186,18 +188,18 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     _filterText = text;
 }
 
-- (void)refresh
+- (void)reloadVisibleRows
 {
-    self.fOutline.needsDisplay = YES;
+    NSRect visibleRect = self.fOutline.visibleRect;
+    NSRange range = [self.fOutline rowsInRect:visibleRect];
+
+    NSIndexSet* rowIndexes = [NSIndexSet indexSetWithIndexesInRange:range];
+    NSIndexSet* columnIndexes = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, self.fOutline.numberOfColumns)];
+
+    [self.fOutline reloadDataForRowIndexes:rowIndexes columnIndexes:columnIndexes];
 }
 
-- (void)outlineViewSelectionDidChange:(NSNotification*)notification
-{
-    if ([QLPreviewPanel sharedPreviewPanelExists] && [QLPreviewPanel sharedPreviewPanel].visible)
-    {
-        [[QLPreviewPanel sharedPreviewPanel] reloadData];
-    }
-}
+#pragma mark - NSOutlineViewDataSource
 
 - (NSInteger)outlineView:(NSOutlineView*)outlineView numberOfChildrenOfItem:(id)item
 {
@@ -222,61 +224,65 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     return (item ? ((FileListNode*)item).children : self.fFileList)[index];
 }
 
-- (id)outlineView:(NSOutlineView*)outlineView objectValueForTableColumn:(NSTableColumn*)tableColumn byItem:(id)item
-{
-    if ([tableColumn.identifier isEqualToString:@"Check"])
-    {
-        return @([self.torrent checkForFiles:((FileListNode*)item).indexes]);
-    }
-    else
-    {
-        return item;
-    }
-}
+#pragma mark - NSOutlineViewDelegate
 
-- (void)outlineView:(NSOutlineView*)outlineView
-    willDisplayCell:(id)cell
-     forTableColumn:(NSTableColumn*)tableColumn
-               item:(id)item
+- (NSView*)outlineView:(NSOutlineView*)outlineView viewForTableColumn:(NSTableColumn*)tableColumn item:(id)item
 {
     NSString* identifier = tableColumn.identifier;
-    if ([identifier isEqualToString:@"Check"])
-    {
-        [cell setEnabled:[self.torrent canChangeDownloadCheckForFiles:((FileListNode*)item).indexes]];
-    }
-    else if ([identifier isEqualToString:@"Priority"])
-    {
-        [cell setRepresentedObject:item];
+    FileListNode* node = (FileListNode*)item;
 
-        NSInteger hoveredRow = self.fOutline.hoveredRow;
-        ((FilePriorityCell*)cell).hovered = hoveredRow != -1 && hoveredRow == [self.fOutline rowForItem:item];
-    }
-}
-
-- (void)outlineView:(NSOutlineView*)outlineView
-     setObjectValue:(id)object
-     forTableColumn:(NSTableColumn*)tableColumn
-             byItem:(id)item
-{
-    NSString* identifier = tableColumn.identifier;
-    if ([identifier isEqualToString:@"Check"])
+    if ([identifier isEqualToString:@"Name"])
     {
-        NSIndexSet* indexSet;
-        if (NSEvent.modifierFlags & NSEventModifierFlagOption)
+        BaseFileNameCellView* cellView = nil;
+
+        if (node.isFolder)
         {
-            indexSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, self.torrent.fileCount)];
+            cellView = [outlineView makeViewWithIdentifier:@"OnlyFolderCell" owner:self];
+            if (!cellView)
+            {
+                cellView = [[FolderNameCellView alloc] initWithFrame:NSZeroRect];
+                cellView.identifier = @"OnlyFolderCell";
+            }
         }
         else
         {
-            indexSet = ((FileListNode*)item).indexes;
+            cellView = [outlineView makeViewWithIdentifier:@"OnlyFileCell" owner:self];
+            if (!cellView)
+            {
+                cellView = [[FileNameCellView alloc] initWithFrame:NSZeroRect];
+                cellView.identifier = @"OnlyFileCell";
+            }
         }
+        cellView.node = node;
 
-        [self.torrent setFileCheckState:[object intValue] != NSControlStateValueOff ? NSControlStateValueOn : NSControlStateValueOff
-                             forIndexes:indexSet];
-        self.fOutline.needsDisplay = YES;
-
-        [NSNotificationCenter.defaultCenter postNotificationName:@"UpdateUI" object:nil];
+        return cellView;
     }
+    else if ([identifier isEqualToString:@"Priority"])
+    {
+        FilePriorityCellView* cellView = [outlineView makeViewWithIdentifier:@"PriorityCell" owner:self];
+        if (!cellView)
+        {
+            cellView = [[FilePriorityCellView alloc] initWithFrame:NSZeroRect];
+            cellView.identifier = @"PriorityCell";
+        }
+        cellView.node = node;
+
+        return cellView;
+    }
+    else if ([identifier isEqualToString:@"Check"])
+    {
+        FileCheckCellView* cellView = [outlineView makeViewWithIdentifier:@"CheckCell" owner:self];
+        if (!cellView)
+        {
+            cellView = [[FileCheckCellView alloc] initWithFrame:NSZeroRect];
+            cellView.identifier = @"CheckCell";
+        }
+        cellView.node = node;
+
+        return cellView;
+    }
+
+    return nil;
 }
 
 - (NSString*)outlineView:(NSOutlineView*)outlineView typeSelectStringForTableColumn:(NSTableColumn*)tableColumn item:(id)item
@@ -284,60 +290,13 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     return ((FileListNode*)item).name;
 }
 
-- (NSString*)outlineView:(NSOutlineView*)outlineView
-          toolTipForCell:(NSCell*)cell
-                    rect:(NSRectPointer)rect
-             tableColumn:(NSTableColumn*)tableColumn
-                    item:(id)item
-           mouseLocation:(NSPoint)mouseLocation
+- (void)outlineViewSelectionDidChange:(NSNotification*)notification
 {
-    NSString* ident = tableColumn.identifier;
-    if ([ident isEqualToString:@"Name"])
+    [self reloadVisibleRows];
+    if ([QLPreviewPanel sharedPreviewPanelExists] && [QLPreviewPanel sharedPreviewPanel].visible)
     {
-        NSString* path = [self.torrent fileLocation:item];
-        if (!path)
-        {
-            FileListNode* node = (FileListNode*)item;
-            path = [node.path stringByAppendingPathComponent:node.name];
-        }
-        return path;
+        [[QLPreviewPanel sharedPreviewPanel] reloadData];
     }
-    else if ([ident isEqualToString:@"Check"])
-    {
-        switch (cell.state)
-        {
-        case NSControlStateValueOff:
-            return NSLocalizedString(@"Don't Download", "files tab -> tooltip");
-        case NSControlStateValueOn:
-            return NSLocalizedString(@"Download", "files tab -> tooltip");
-        case NSControlStateValueMixed:
-            return NSLocalizedString(@"Download Some", "files tab -> tooltip");
-        }
-    }
-    else if ([ident isEqualToString:@"Priority"])
-    {
-        NSSet* priorities = [self.torrent filePrioritiesForIndexes:((FileListNode*)item).indexes];
-        switch (priorities.count)
-        {
-        case 0:
-            return NSLocalizedString(@"Priority Not Available", "files tab -> tooltip");
-        case 1:
-            switch ([[priorities anyObject] intValue])
-            {
-            case TR_PRI_LOW:
-                return NSLocalizedString(@"Low Priority", "files tab -> tooltip");
-            case TR_PRI_HIGH:
-                return NSLocalizedString(@"High Priority", "files tab -> tooltip");
-            case TR_PRI_NORMAL:
-                return NSLocalizedString(@"Normal Priority", "files tab -> tooltip");
-            }
-            break;
-        default:
-            return NSLocalizedString(@"Multiple Priorities", "files tab -> tooltip");
-        }
-    }
-
-    return nil;
 }
 
 - (CGFloat)outlineView:(NSOutlineView*)outlineView heightOfRowByItem:(id)item
@@ -352,9 +311,11 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     }
 }
 
+#pragma mark - Actions
+
 - (void)setCheck:(id)sender
 {
-    NSInteger state = [sender tag] == FileCheckMenuTagUncheck ? NSControlStateValueOff : NSControlStateValueOn;
+    NSControlStateValue state = [sender tag] == FileCheckMenuTagUncheck ? NSControlStateValueOff : NSControlStateValueOn;
 
     NSIndexSet* indexSet = self.fOutline.selectedRowIndexes;
     NSMutableIndexSet* itemIndexes = [NSMutableIndexSet indexSet];
@@ -365,7 +326,8 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     }
 
     [self.torrent setFileCheckState:state forIndexes:itemIndexes];
-    self.fOutline.needsDisplay = YES;
+
+    [self reloadVisibleRows];
 }
 
 - (void)setOnlySelectedCheck:(id)sender
@@ -384,21 +346,23 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     [remainingItemIndexes removeIndexes:itemIndexes];
     [self.torrent setFileCheckState:NSControlStateValueOff forIndexes:remainingItemIndexes];
 
-    self.fOutline.needsDisplay = YES;
+    [self reloadVisibleRows];
 }
 
 - (void)checkAll
 {
     NSIndexSet* indexSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, self.torrent.fileCount)];
     [self.torrent setFileCheckState:NSControlStateValueOn forIndexes:indexSet];
-    self.fOutline.needsDisplay = YES;
+
+    [self reloadVisibleRows];
 }
 
 - (void)uncheckAll
 {
     NSIndexSet* indexSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, self.torrent.fileCount)];
     [self.torrent setFileCheckState:NSControlStateValueOff forIndexes:indexSet];
-    self.fOutline.needsDisplay = YES;
+
+    [self reloadVisibleRows];
 }
 
 - (void)setPriority:(id)sender
@@ -429,7 +393,8 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     }
 
     [self.torrent setFilePriority:priority forIndexes:itemIndexes];
-    self.fOutline.needsDisplay = YES;
+
+    [self reloadVisibleRows];
 }
 
 - (void)revealFile:(id)sender
@@ -463,7 +428,7 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
         [FileRenameSheetController presentSheetForTorrent:torrent modalForWindow:self.fOutline.window completionHandler:^(BOOL didRename) {
             if (didRename)
             {
-                [NSNotificationCenter.defaultCenter postNotificationName:@"UpdateQueue" object:self];
+                [NSNotificationCenter.defaultCenter postNotificationName:@"UpdateTorrentsState" object:nil];
                 [NSNotificationCenter.defaultCenter postNotificationName:@"ResetInspector" object:self
                                                                 userInfo:@{ @"Torrent" : torrent }];
             }
@@ -479,6 +444,8 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
         }];
     }
 }
+
+#pragma mark - NSMenuItemValidation
 
 #warning make real view controller (Leopard-only) so that Command-R will work
 - (BOOL)validateMenuItem:(NSMenuItem*)menuItem
@@ -518,7 +485,7 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
             [itemIndexes addIndexes:node.indexes];
         }
 
-        NSInteger state = (menuItem.tag == FileCheckMenuTagCheck) ? NSControlStateValueOn : NSControlStateValueOff;
+        NSControlStateValue state = (menuItem.tag == FileCheckMenuTagCheck) ? NSControlStateValueOn : NSControlStateValueOff;
         return [self.torrent checkForFiles:itemIndexes] != state && [self.torrent canChangeDownloadCheckForFiles:itemIndexes];
     }
 
@@ -607,6 +574,10 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"Check Selected", "File Outline -> Menu")
                                                   action:@selector(setCheck:)
                                            keyEquivalent:@""];
+    if (@available(macOS 26.0, *))
+    {
+        item.image = [NSImage imageWithSystemSymbolName:@"checkmark.circle" accessibilityDescription:nil];
+    }
     item.target = self;
     item.tag = FileCheckMenuTagCheck;
     [menu addItem:item];
@@ -614,6 +585,10 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     item = [[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"Uncheck Selected", "File Outline -> Menu")
                                       action:@selector(setCheck:)
                                keyEquivalent:@""];
+    if (@available(macOS 26.0, *))
+    {
+        item.image = [NSImage imageWithSystemSymbolName:@"circle" accessibilityDescription:nil];
+    }
     item.target = self;
     item.tag = FileCheckMenuTagUncheck;
     [menu addItem:item];
@@ -622,6 +597,10 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     item = [[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"Only Check Selected", "File Outline -> Menu")
                                       action:@selector(setOnlySelectedCheck:)
                                keyEquivalent:@""];
+    if (@available(macOS 26.0, *))
+    {
+        item.image = [NSImage imageWithSystemSymbolName:@"checkmark.circle.dotted" accessibilityDescription:nil];
+    }
     item.target = self;
     [menu addItem:item];
 
@@ -630,6 +609,10 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     //priority
     item = [[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"Priority", "File Outline -> Menu") action:NULL keyEquivalent:@""];
     NSMenu* priorityMenu = [[NSMenu alloc] initWithTitle:@""];
+    if (@available(macOS 26.0, *))
+    {
+        item.image = [NSImage imageWithSystemSymbolName:@"chevron.up.chevron.down" accessibilityDescription:nil];
+    }
     item.submenu = priorityMenu;
     [menu addItem:item];
 
@@ -663,6 +646,10 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     item = [[NSMenuItem alloc] initWithTitle:NSLocalizedString(@"Show in Finder", "File Outline -> Menu")
                                       action:@selector(revealFile:)
                                keyEquivalent:@""];
+    if (@available(macOS 26.0, *))
+    {
+        item.image = [NSImage imageWithSystemSymbolName:@"finder" accessibilityDescription:nil];
+    }
     item.target = self;
     [menu addItem:item];
 
@@ -672,6 +659,10 @@ typedef NS_ENUM(NSUInteger, FilePriorityMenuTag) { //
     item = [[NSMenuItem alloc] initWithTitle:[NSLocalizedString(@"Rename File", "File Outline -> Menu") stringByAppendingEllipsis]
                                       action:@selector(renameSelected:)
                                keyEquivalent:@""];
+    if (@available(macOS 26.0, *))
+    {
+        item.image = [NSImage imageWithSystemSymbolName:@"pencil" accessibilityDescription:nil];
+    }
     item.target = self;
     [menu addItem:item];
 

@@ -14,28 +14,31 @@
 #include <QString>
 #include <QVariant>
 
-#include <libtransmission/tr-macros.h>
-
 #include "Utils.h" // for std::hash<QString>
 #include "Typedefs.h"
+
+#include "libtransmission/tr-macros.h"
 
 class FileTreeItem
 {
     Q_DECLARE_TR_FUNCTIONS(FileTreeItem)
-    TR_DISABLE_COPY_MOVE(FileTreeItem)
 
 public:
-    static auto constexpr Low = int{ 1 << 0 };
-    static auto constexpr Normal = int{ 1 << 1 };
-    static auto constexpr High = int{ 1 << 2 };
+    static int constexpr Low = 1 << 0;
+    static int constexpr Normal = 1 << 1;
+    static int constexpr High = 1 << 2;
 
-    FileTreeItem(QString const& name = QString{}, int file_index = -1, uint64_t size = 0)
-        : name_{ name }
+    explicit FileTreeItem(QString name = QString{}, int file_index = -1, uint64_t size = 0)
+        : name_{ std::move(name) }
         , total_size_{ size }
         , file_index_{ file_index }
     {
     }
 
+    FileTreeItem& operator=(FileTreeItem&&) = delete;
+    FileTreeItem& operator=(FileTreeItem const&) = delete;
+    FileTreeItem(FileTreeItem&&) = delete;
+    FileTreeItem(FileTreeItem const&) = delete;
     ~FileTreeItem();
 
     void appendChild(FileTreeItem* child);
@@ -46,9 +49,9 @@ public:
         return children_.at(row);
     }
 
-    [[nodiscard]] TR_CONSTEXPR20 int childCount() const noexcept
+    [[nodiscard]] constexpr int childCount() const noexcept
     {
-        return std::size(children_);
+        return static_cast<int>(std::size(children_));
     }
 
     [[nodiscard]] constexpr auto* parent() noexcept

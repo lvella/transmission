@@ -14,11 +14,11 @@
 #include <cstddef> // for size_t
 #include <memory>
 
-#include "libtransmission/transmission.h" // for tr_direction, tr_block_ind...
-
+#include "libtransmission/bep55-holepunch.h"
 #include "libtransmission/interned-string.h"
 #include "libtransmission/net.h" // tr_socket_address
 #include "libtransmission/peer-common.h" // for tr_peer
+#include "libtransmission/types.h"
 
 class tr_peerIo;
 class tr_peerMsgs;
@@ -37,13 +37,18 @@ class tr_peerMsgs : public tr_peer
 public:
     tr_peerMsgs(
         tr_torrent const& tor,
-        tr_peer_info* peer_info_in,
-        tr_interned_string user_agent,
+        std::shared_ptr<tr_peer_info> peer_info_in,
+        tr_peer_id_t peer_id,
         bool connection_is_encrypted,
         bool connection_is_incoming,
         bool connection_is_utp);
 
     ~tr_peerMsgs() override;
+
+    tr_peerMsgs(tr_peerMsgs const&) = delete;
+    tr_peerMsgs(tr_peerMsgs&&) = delete;
+    tr_peerMsgs& operator=(tr_peerMsgs const&) = delete;
+    tr_peerMsgs& operator=(tr_peerMsgs&&) = delete;
 
     [[nodiscard]] static auto size() noexcept
     {
@@ -90,9 +95,24 @@ public:
         return user_agent_;
     }
 
+    [[nodiscard]] constexpr auto const& peer_id() const noexcept
+    {
+        return peer_id_;
+    }
+
     [[nodiscard]] constexpr auto is_active(tr_direction direction) const noexcept
     {
-        return is_active_[direction];
+        return is_active_[static_cast<uint8_t>(direction)];
+    }
+
+    [[nodiscard]] constexpr auto is_disconnecting() const noexcept
+    {
+        return is_disconnecting_;
+    }
+
+    constexpr void disconnect_soon() noexcept
+    {
+        is_disconnecting_ = true;
     }
 
     [[nodiscard]] virtual tr_socket_address socket_address() const = 0;
@@ -106,11 +126,17 @@ public:
 
     virtual void on_piece_completed(tr_piece_index_t) = 0;
 
-    static tr_peerMsgs* create(
+    [[nodiscard]] virtual bool can_ut_holepunch() const noexcept = 0;
+    virtual void send_ut_holepunch(
+        bep55::MsgType msg_type,
+        tr_socket_address const& addr,
+        bep55::ErrorCode err_code = bep55::ErrNonError) = 0;
+
+    static std::shared_ptr<tr_peerMsgs> create(
         tr_torrent& torrent,
-        tr_peer_info* peer_info,
+        std::shared_ptr<tr_peer_info> peer_info,
         std::shared_ptr<tr_peerIo> io,
-        tr_interned_string user_agent,
+        tr_peer_id_t peer_id,
         tr_peer_callback_bt callback,
         void* callback_data);
 
@@ -137,7 +163,7 @@ protected:
 
     constexpr void set_active(tr_direction direction, bool active) noexcept
     {
-        is_active_[direction] = active;
+        is_active_[static_cast<uint8_t>(direction)] = active;
     }
 
     constexpr void set_user_agent(tr_interned_string val) noexcept
@@ -145,9 +171,13 @@ protected:
         user_agent_ = val;
     }
 
+    constexpr void set_peer_id(tr_peer_id_t val) noexcept
+    {
+        peer_id_ = val;
+    }
+
 public:
-    // TODO(tearfur): change this to reference
-    tr_peer_info* const peer_info;
+    std::shared_ptr<tr_peer_info> const peer_info;
 
 private:
     static inline auto n_peers = std::atomic<size_t>{};
@@ -155,6 +185,8 @@ private:
     // What software the peer is running.
     // Derived from the `v` string in LTEP's handshake dictionary, when available.
     tr_interned_string user_agent_;
+
+    tr_peer_id_t peer_id_;
 
     bool const connection_is_encrypted_;
     bool const connection_is_incoming_;
@@ -173,6 +205,9 @@ private:
 
     // whether or not the peer has indicated it will download from us
     bool peer_is_interested_ = false;
+
+    // whether or not we should free this peer soon.
+    bool is_disconnecting_ = false;
 };
 
 /* @} */

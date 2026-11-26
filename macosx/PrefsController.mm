@@ -3,7 +3,8 @@
 // License text can be found in the licenses/ folder.
 
 #import <Sparkle/Sparkle.h>
-#include <libtransmission/utils.h>
+
+#include <libtransmission/string-utils.h>
 
 #import "VDKQueue.h"
 
@@ -16,6 +17,7 @@
 #import "BonjourController.h"
 #import "NSImageAdditions.h"
 #import "NSStringAdditions.h"
+#import "Utils.h"
 
 typedef NS_ENUM(NSUInteger, DownloadPopupIndex) {
     DownloadPopupIndexFolder = 0,
@@ -138,9 +140,11 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
 
             NSURL* blocklistDir = [[NSFileManager.defaultManager URLsForDirectory:NSApplicationDirectory inDomains:NSUserDomainMask][0]
                 URLByAppendingPathComponent:@"Transmission/blocklists/"];
-            [NSFileManager.defaultManager moveItemAtURL:[blocklistDir URLByAppendingPathComponent:@"level1.bin"]
-                                                  toURL:[blocklistDir URLByAppendingPathComponent:@DEFAULT_BLOCKLIST_FILENAME]
-                                                  error:nil];
+            [NSFileManager.defaultManager
+                moveItemAtURL:[blocklistDir URLByAppendingPathComponent:@"level1.bin"]
+                        toURL:[blocklistDir
+                                  URLByAppendingPathComponent:[NSString stringWithUTF8String:TrDefaultBlocklistFilename.data()]]
+                        error:nil];
         }
 
         //save a new random port
@@ -243,9 +247,11 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     self.fNatStatus = -1;
 
     [self updatePortStatus];
-    self.fPortStatusTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 target:self selector:@selector(updatePortStatus)
-                                                           userInfo:nil
-                                                            repeats:YES];
+
+    __weak __auto_type weakSelf = self;
+    self.fPortStatusTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer* _Nonnull timer) {
+        [weakSelf updatePortStatus];
+    }];
 
     //set peer connections
     self.fPeersGlobalField.integerValue = [self.fDefaults integerForKey:@"PeersTotal"];
@@ -302,7 +308,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     if ([ident isEqualToString:ToolbarTabGeneral])
     {
         item.label = NSLocalizedString(@"General", "Preferences -> toolbar item title");
-        item.image = [NSImage systemSymbol:@"gearshape" withFallback:NSImageNamePreferencesGeneral];
+        item.image = [NSImage imageWithSystemSymbolName:@"gearshape" accessibilityDescription:nil];
         item.target = self;
         item.action = @selector(setPrefView:);
         item.autovalidates = NO;
@@ -310,7 +316,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     else if ([ident isEqualToString:ToolbarTabTransfers])
     {
         item.label = NSLocalizedString(@"Transfers", "Preferences -> toolbar item title");
-        item.image = [NSImage systemSymbol:@"arrow.up.arrow.down" withFallback:@"Transfers"];
+        item.image = [NSImage imageWithSystemSymbolName:@"arrow.up.arrow.down" accessibilityDescription:nil];
         item.target = self;
         item.action = @selector(setPrefView:);
         item.autovalidates = NO;
@@ -318,7 +324,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     else if ([ident isEqualToString:ToolbarTabGroups])
     {
         item.label = NSLocalizedString(@"Groups", "Preferences -> toolbar item title");
-        item.image = [NSImage systemSymbol:@"pin" withFallback:@"Groups"];
+        item.image = [NSImage imageWithSystemSymbolName:@"pin" accessibilityDescription:nil];
         item.target = self;
         item.action = @selector(setPrefView:);
         item.autovalidates = NO;
@@ -326,7 +332,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     else if ([ident isEqualToString:ToolbarTabBandwidth])
     {
         item.label = NSLocalizedString(@"Bandwidth", "Preferences -> toolbar item title");
-        item.image = [NSImage systemSymbol:@"speedometer" withFallback:@"Bandwidth"];
+        item.image = [NSImage imageWithSystemSymbolName:@"speedometer" accessibilityDescription:nil];
         item.target = self;
         item.action = @selector(setPrefView:);
         item.autovalidates = NO;
@@ -334,7 +340,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     else if ([ident isEqualToString:ToolbarTabPeers])
     {
         item.label = NSLocalizedString(@"Peers", "Preferences -> toolbar item title");
-        item.image = [NSImage systemSymbol:@"person.2" withFallback:NSImageNameUserGroup];
+        item.image = [NSImage imageWithSystemSymbolName:@"person.2" accessibilityDescription:nil];
         item.target = self;
         item.action = @selector(setPrefView:);
         item.autovalidates = NO;
@@ -342,7 +348,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     else if ([ident isEqualToString:ToolbarTabNetwork])
     {
         item.label = NSLocalizedString(@"Network", "Preferences -> toolbar item title");
-        item.image = [NSImage systemSymbol:@"network" withFallback:NSImageNameNetwork];
+        item.image = [NSImage imageWithSystemSymbolName:@"network" accessibilityDescription:nil];
         item.target = self;
         item.action = @selector(setPrefView:);
         item.autovalidates = NO;
@@ -350,7 +356,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     else if ([ident isEqualToString:ToolbarTabRemote])
     {
         item.label = NSLocalizedString(@"Remote", "Preferences -> toolbar item title");
-        item.image = [NSImage systemSymbol:@"antenna.radiowaves.left.and.right" withFallback:@"Remote"];
+        item.image = [NSImage imageWithSystemSymbolName:@"antenna.radiowaves.left.and.right" accessibilityDescription:nil];
         item.target = self;
         item.action = @selector(setPrefView:);
         item.autovalidates = NO;
@@ -653,19 +659,19 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
 
 - (void)applySpeedSettings:(id)sender
 {
-    tr_sessionLimitSpeed(self.fHandle, TR_UP, [self.fDefaults boolForKey:@"CheckUpload"]);
-    tr_sessionSetSpeedLimit_KBps(self.fHandle, TR_UP, [self.fDefaults integerForKey:@"UploadLimit"]);
+    tr_sessionLimitSpeed(self.fHandle, tr_direction::Up, [self.fDefaults boolForKey:@"CheckUpload"]);
+    tr_sessionSetSpeedLimit_KBps(self.fHandle, tr_direction::Up, [self.fDefaults integerForKey:@"UploadLimit"]);
 
-    tr_sessionLimitSpeed(self.fHandle, TR_DOWN, [self.fDefaults boolForKey:@"CheckDownload"]);
-    tr_sessionSetSpeedLimit_KBps(self.fHandle, TR_DOWN, [self.fDefaults integerForKey:@"DownloadLimit"]);
+    tr_sessionLimitSpeed(self.fHandle, tr_direction::Down, [self.fDefaults boolForKey:@"CheckDownload"]);
+    tr_sessionSetSpeedLimit_KBps(self.fHandle, tr_direction::Down, [self.fDefaults integerForKey:@"DownloadLimit"]);
 
     [NSNotificationCenter.defaultCenter postNotificationName:@"SpeedLimitUpdate" object:nil];
 }
 
 - (void)applyAltSpeedSettings
 {
-    tr_sessionSetAltSpeed_KBps(self.fHandle, TR_UP, [self.fDefaults integerForKey:@"SpeedLimitUploadLimit"]);
-    tr_sessionSetAltSpeed_KBps(self.fHandle, TR_DOWN, [self.fDefaults integerForKey:@"SpeedLimitDownloadLimit"]);
+    tr_sessionSetAltSpeed_KBps(self.fHandle, tr_direction::Up, [self.fDefaults integerForKey:@"SpeedLimitUploadLimit"]);
+    tr_sessionSetAltSpeed_KBps(self.fHandle, tr_direction::Down, [self.fDefaults integerForKey:@"SpeedLimitDownloadLimit"]);
 
     [NSNotificationCenter.defaultCenter postNotificationName:@"SpeedLimitUpdate" object:nil];
 }
@@ -875,11 +881,11 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
 - (void)setQueue:(id)sender
 {
     //let's just do both - easier that way
-    tr_sessionSetQueueEnabled(self.fHandle, TR_DOWN, [self.fDefaults boolForKey:@"Queue"]);
-    tr_sessionSetQueueEnabled(self.fHandle, TR_UP, [self.fDefaults boolForKey:@"QueueSeed"]);
+    tr_sessionSetQueueEnabled(self.fHandle, tr_direction::Down, [self.fDefaults boolForKey:@"Queue"]);
+    tr_sessionSetQueueEnabled(self.fHandle, tr_direction::Up, [self.fDefaults boolForKey:@"QueueSeed"]);
 
     //handle if any transfers switch from queued to paused
-    [NSNotificationCenter.defaultCenter postNotificationName:@"UpdateQueue" object:self];
+    [NSNotificationCenter.defaultCenter postNotificationName:@"UpdateTorrentsState" object:nil];
 }
 
 - (void)setQueueNumber:(id)sender
@@ -889,7 +895,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
 
     [self.fDefaults setInteger:number forKey:seed ? @"QueueSeedNumber" : @"QueueDownloadNumber"];
 
-    tr_sessionSetQueueSize(self.fHandle, seed ? TR_UP : TR_DOWN, number);
+    tr_sessionSetQueueSize(self.fHandle, seed ? tr_direction::Up : tr_direction::Down, number);
 }
 
 - (void)setStalled:(id)sender
@@ -914,6 +920,12 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
 {
     [self.fDefaults setBool:self.fFolderPopUp.indexOfSelectedItem == DownloadPopupIndexFolder forKey:@"DownloadLocationConstant"];
     [self updateShowAddMagnetWindowField];
+}
+
+- (IBAction)setVerifyDataOnCompletion:(id)sender
+{
+    bool enabled = [self.fDefaults boolForKey:@"VerifyDataOnCompletion"];
+    tr_sessionSetCompleteVerifyEnabled(self.fHandle, enabled);
 }
 
 - (void)folderSheetShow:(id)sender
@@ -1312,10 +1324,10 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     [self.fDefaults setBool:encryptionMode == TR_ENCRYPTION_REQUIRED forKey:@"EncryptionRequire"];
 
     //download directory
-    NSString* downloadLocation = @(tr_sessionGetDownloadDir(self.fHandle)).stringByStandardizingPath;
+    NSString* downloadLocation = tr_strv_to_utf8_nsstring(tr_sessionGetDownloadDir(self.fHandle)).stringByStandardizingPath;
     [self.fDefaults setObject:downloadLocation forKey:@"DownloadFolder"];
 
-    NSString* incompleteLocation = @(tr_sessionGetIncompleteDir(self.fHandle)).stringByStandardizingPath;
+    NSString* incompleteLocation = tr_strv_to_utf8_nsstring(tr_sessionGetIncompleteDir(self.fHandle)).stringByStandardizingPath;
     [self.fDefaults setObject:incompleteLocation forKey:@"IncompleteDownloadFolder"];
 
     BOOL const useIncomplete = tr_sessionIsIncompleteDirEnabled(self.fHandle);
@@ -1366,17 +1378,17 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     [self.fDefaults setBool:randomPort forKey:@"RandomPort"];
 
     //speed limit - down
-    BOOL const downLimitEnabled = tr_sessionIsSpeedLimited(self.fHandle, TR_DOWN);
+    BOOL const downLimitEnabled = tr_sessionIsSpeedLimited(self.fHandle, tr_direction::Down);
     [self.fDefaults setBool:downLimitEnabled forKey:@"CheckDownload"];
 
-    auto const downLimit = tr_sessionGetSpeedLimit_KBps(self.fHandle, TR_DOWN);
+    auto const downLimit = tr_sessionGetSpeedLimit_KBps(self.fHandle, tr_direction::Down);
     [self.fDefaults setInteger:downLimit forKey:@"DownloadLimit"];
 
     //speed limit - up
-    BOOL const upLimitEnabled = tr_sessionIsSpeedLimited(self.fHandle, TR_UP);
+    BOOL const upLimitEnabled = tr_sessionIsSpeedLimited(self.fHandle, tr_direction::Up);
     [self.fDefaults setBool:upLimitEnabled forKey:@"CheckUpload"];
 
-    auto const upLimit = tr_sessionGetSpeedLimit_KBps(self.fHandle, TR_UP);
+    auto const upLimit = tr_sessionGetSpeedLimit_KBps(self.fHandle, tr_direction::Up);
     [self.fDefaults setInteger:upLimit forKey:@"UploadLimit"];
 
     //alt speed limit enabled
@@ -1384,11 +1396,11 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     [self.fDefaults setBool:useAltSpeed forKey:@"SpeedLimit"];
 
     //alt speed limit - down
-    auto const downLimitAlt = tr_sessionGetAltSpeed_KBps(self.fHandle, TR_DOWN);
+    auto const downLimitAlt = tr_sessionGetAltSpeed_KBps(self.fHandle, tr_direction::Down);
     [self.fDefaults setInteger:downLimitAlt forKey:@"SpeedLimitDownloadLimit"];
 
     //alt speed limit - up
-    auto const upLimitAlt = tr_sessionGetAltSpeed_KBps(self.fHandle, TR_UP);
+    auto const upLimitAlt = tr_sessionGetAltSpeed_KBps(self.fHandle, tr_direction::Up);
     [self.fDefaults setInteger:upLimitAlt forKey:@"SpeedLimitUploadLimit"];
 
     //alt speed limit schedule
@@ -1408,7 +1420,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     BOOL const blocklist = tr_blocklistIsEnabled(self.fHandle);
     [self.fDefaults setBool:blocklist forKey:@"BlocklistNew"];
 
-    NSString* blocklistURL = @(tr_blocklistGetURL(self.fHandle));
+    NSString* blocklistURL = tr_strv_to_utf8_nsstring(tr_blocklistGetURL(self.fHandle));
     [self.fDefaults setObject:blocklistURL forKey:@"BlocklistURL"];
 
     //seed ratio
@@ -1426,16 +1438,16 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     [self.fDefaults setInteger:idleLimitMin forKey:@"IdleLimitMinutes"];
 
     //queue
-    BOOL const downloadQueue = tr_sessionGetQueueEnabled(self.fHandle, TR_DOWN);
+    BOOL const downloadQueue = tr_sessionGetQueueEnabled(self.fHandle, tr_direction::Down);
     [self.fDefaults setBool:downloadQueue forKey:@"Queue"];
 
-    size_t const downloadQueueNum = tr_sessionGetQueueSize(self.fHandle, TR_DOWN);
+    size_t const downloadQueueNum = tr_sessionGetQueueSize(self.fHandle, tr_direction::Down);
     [self.fDefaults setInteger:downloadQueueNum forKey:@"QueueDownloadNumber"];
 
-    BOOL const seedQueue = tr_sessionGetQueueEnabled(self.fHandle, TR_UP);
+    BOOL const seedQueue = tr_sessionGetQueueEnabled(self.fHandle, tr_direction::Up);
     [self.fDefaults setBool:seedQueue forKey:@"QueueSeed"];
 
-    size_t const seedQueueNum = tr_sessionGetQueueSize(self.fHandle, TR_UP);
+    size_t const seedQueueNum = tr_sessionGetQueueSize(self.fHandle, tr_direction::Up);
     [self.fDefaults setInteger:seedQueueNum forKey:@"QueueSeedNumber"];
 
     BOOL const checkStalled = tr_sessionGetQueueStalledEnabled(self.fHandle);
@@ -1448,7 +1460,7 @@ static NSString* const kWebUIURLFormat = @"http://localhost:%ld/";
     BOOL const doneScriptEnabled = tr_sessionIsScriptEnabled(self.fHandle, TR_SCRIPT_ON_TORRENT_DONE);
     [self.fDefaults setBool:doneScriptEnabled forKey:@"DoneScriptEnabled"];
 
-    NSString* doneScriptPath = @(tr_sessionGetScript(self.fHandle, TR_SCRIPT_ON_TORRENT_DONE));
+    NSString* doneScriptPath = tr_strv_to_utf8_nsstring(tr_sessionGetScript(self.fHandle, TR_SCRIPT_ON_TORRENT_DONE));
     [self.fDefaults setObject:doneScriptPath forKey:@"DoneScriptPath"];
 
     //update gui if loaded

@@ -7,8 +7,6 @@
 
 #include <QTimer>
 
-#include <libtransmission/tr-macros.h>
-
 #include "BaseDialog.h"
 #include "ui_StatsDialog.h"
 
@@ -17,10 +15,14 @@ class Session;
 class StatsDialog : public BaseDialog
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(StatsDialog)
 
 public:
-    explicit StatsDialog(Session&, QWidget* parent = nullptr);
+    explicit StatsDialog(Session& session, QWidget* parent = nullptr);
+    ~StatsDialog() override = default;
+    StatsDialog(StatsDialog&&) = delete;
+    StatsDialog(StatsDialog const&) = delete;
+    StatsDialog& operator=(StatsDialog&&) = delete;
+    StatsDialog& operator=(StatsDialog const&) = delete;
 
     // QWidget
     void setVisible(bool visible) override;

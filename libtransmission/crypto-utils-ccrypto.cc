@@ -9,13 +9,12 @@
 #include <CommonCrypto/CommonDigest.h>
 #include <CommonCrypto/CommonRandom.h>
 
-#include <fmt/core.h>
-
-#include "libtransmission/transmission.h"
+#include <fmt/format.h>
 
 #include "libtransmission/crypto-utils.h"
 #include "libtransmission/log.h"
 #include "libtransmission/tr-assert.h"
+#include "libtransmission/types.h"
 #include "libtransmission/utils.h"
 
 #define TR_CRYPTO_X509_FALLBACK
@@ -70,7 +69,7 @@ void log_ccrypto_error(CCCryptorStatus error_code, char const* file, long line)
             line,
             TR_LOG_ERROR,
             fmt::format(
-                _("{crypto_library} error: {error} ({error_code})"),
+                fmt::runtime(_("{crypto_library} error: {error} ({error_code})")),
                 fmt::arg("crypto_library", "CCrypto"),
                 fmt::arg("error", ccrypto_error_to_str(error_code)),
                 fmt::arg("error_code", error_code)));

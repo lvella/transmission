@@ -10,39 +10,34 @@
 #include <QSortFilterProxyModel>
 #include <QTimer>
 
-#include <libtransmission/tr-macros.h>
-
 #include "Filters.h"
+#include "Prefs.h"
 
 class QString;
 
-class FilterMode;
-class Prefs;
 class Torrent;
 
 class TorrentFilter : public QSortFilterProxyModel
 {
     Q_OBJECT
-    TR_DISABLE_COPY_MOVE(TorrentFilter)
 
 public:
-    enum TextMode
-    {
-        FILTER_BY_NAME,
-        FILTER_BY_FILES,
-        FILTER_BY_TRACKER
-    };
-
     explicit TorrentFilter(Prefs const& prefs);
-    [[nodiscard]] std::array<int, FilterMode::NUM_MODES> countTorrentsPerMode() const;
+    ~TorrentFilter() override = default;
+    TorrentFilter(TorrentFilter&&) = delete;
+    TorrentFilter(TorrentFilter const&) = delete;
+    TorrentFilter& operator=(TorrentFilter&&) = delete;
+    TorrentFilter& operator=(TorrentFilter const&) = delete;
+
+    [[nodiscard]] std::array<int, ShowModeCount> countTorrentsPerMode() const;
 
 protected:
     // QSortFilterProxyModel
-    bool filterAcceptsRow(int, QModelIndex const&) const override;
-    bool lessThan(QModelIndex const&, QModelIndex const&) const override;
+    [[nodiscard]] bool filterAcceptsRow(int source_row, QModelIndex const& source_parent) const override;
+    [[nodiscard]] bool lessThan(QModelIndex const& source_left, QModelIndex const& source_right) const override;
 
 private slots:
-    void onPrefChanged(int key);
+    void onPrefChanged(tr_quark key);
     void refilter();
 
 private:

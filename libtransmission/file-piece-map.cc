@@ -11,13 +11,12 @@
 
 #include <small/set.hpp>
 
-#include "libtransmission/transmission.h"
-
 #include "libtransmission/bitfield.h"
 #include "libtransmission/block-info.h"
 #include "libtransmission/file-piece-map.h"
 #include "libtransmission/torrent-metainfo.h"
 #include "libtransmission/tr-assert.h"
+#include "libtransmission/types.h"
 
 tr_file_piece_map::tr_file_piece_map(tr_torrent_metainfo const& tm)
 {
@@ -44,9 +43,13 @@ void tr_file_piece_map::reset(tr_block_info const& block_info, uint64_t const* c
     for (tr_file_index_t i = 0U; i < n_files; ++i)
     {
         auto const file_size = file_sizes[i];
+
         auto const begin_byte = offset;
-        auto const begin_piece = block_info.byte_loc(begin_byte).piece;
         auto end_byte = tr_byte_index_t{};
+
+        // N.B. If the last file in the torrent is 0 bytes, and the torrent size is a multiple of piece size,
+        // then the computed piece index will be past-the-end. We handle this with std::min.
+        auto const begin_piece = std::min(block_info.byte_loc(begin_byte).piece, block_info.piece_count() - 1U);
         auto end_piece = tr_piece_index_t{};
 
         edge_pieces.insert(begin_piece);
@@ -63,7 +66,6 @@ void tr_file_piece_map::reset(tr_block_info const& block_info, uint64_t const* c
         else
         {
             end_byte = begin_byte;
-            // TODO(ckerr): should end_piece == begin_piece, same as _bytes are?
             end_piece = begin_piece + 1U;
         }
         file_bytes_[i] = byte_span_t{ begin_byte, end_byte };
@@ -193,8 +195,9 @@ tr_priority_t tr_file_priorities::piece_priority(tr_piece_index_t const piece) c
     // check the priorities of the files that touch this piece
     if (auto const [begin_file, end_file] = fpm_->file_span_for_piece(piece); end_file <= std::size(priorities_))
     {
-        auto const begin = std::begin(priorities_) + begin_file;
-        auto const end = std::begin(priorities_) + end_file;
+        using diff_type = decltype(priorities_)::difference_type;
+        auto const begin = std::begin(priorities_) + static_cast<diff_type>(begin_file);
+        auto const end = std::begin(priorities_) + static_cast<diff_type>(end_file);
         if (auto const it = std::max_element(begin, end); it != end)
         {
             return *it;

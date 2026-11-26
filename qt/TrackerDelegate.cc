@@ -10,13 +10,17 @@
 #include <QTextDocument>
 
 #include <libtransmission/web-utils.h>
-#include <libtransmission/favicon-cache.h>
+
+#include <libtransmission-app/favicon-cache.h>
 
 #include "Formatter.h"
+#include "QtCompat.h"
 #include "Torrent.h"
 #include "TrackerDelegate.h"
 #include "TrackerModel.h"
 #include "Utils.h"
+
+using namespace tr::app;
 
 /***
 ****
@@ -90,7 +94,11 @@ ItemLayout::ItemLayout(
 
 QSize TrackerDelegate::sizeHint(QStyleOptionViewItem const& option, TrackerInfo const& info) const
 {
-    ItemLayout const layout{ getText(info), true, option.direction, QPoint{ 0, 0 }, option.rect.width() - Margin.width() * 2 };
+    ItemLayout const layout{ getText(info),
+                             true,
+                             option.direction,
+                             QPoint{ 0, 0 },
+                             option.rect.width() - (Margin.width() * 2) };
     return layout.size() + Margin * 2;
 }
 
@@ -194,7 +202,8 @@ QString TrackerDelegate::getText(TrackerInfo const& inf) const
     if (auto const parsed = tr_urlParse(announce_url); parsed)
     {
         str += QStringLiteral("%1:%2")
-                   .arg(QString::fromUtf8(std::data(parsed->host), std::size(parsed->host)))
+                   .arg(
+                       QString::fromUtf8(std::data(parsed->host), static_cast<IF_QT6(qsizetype, int)>(std::size(parsed->host))))
                    .arg(parsed->port);
     }
     str += inf.st.is_backup ? QStringLiteral("</i>") : QStringLiteral("</b>");

@@ -20,25 +20,20 @@
 
 #include <event2/event.h>
 
+#include <gtest/gtest.h>
+
 #define LIBTRANSMISSION_WATCHDIR_MODULE
 
 #include <libtransmission/file.h>
 #include <libtransmission/timer.h>
 #include <libtransmission/timer-ev.h>
-#include <libtransmission/tr-macros.h>
 #include <libtransmission/tr-strbuf.h>
-#include <libtransmission/utils.h>
 #include <libtransmission/watchdir.h>
 #include <libtransmission/watchdir-base.h>
 
-#include "gtest/gtest.h"
 #include "test-fixtures.h"
 
 using namespace std::literals;
-
-/***
-****
-***/
 
 static auto constexpr GenericRescanInterval = 100ms;
 static auto constexpr RetryDuration = 100ms;
@@ -48,7 +43,7 @@ static auto constexpr RetryDuration = 100ms;
 static auto constexpr ProcessEventsTimeout = 300ms;
 static_assert(ProcessEventsTimeout > GenericRescanInterval);
 
-namespace libtransmission::test
+namespace tr::test
 {
 
 enum class WatchMode : uint8_t
@@ -63,17 +58,14 @@ class WatchDirTest
 {
 private:
     std::shared_ptr<struct event_base> ev_base_;
-    std::unique_ptr<libtransmission::TimerMaker> timer_maker_;
-
-    std::unique_ptr<tr_net_init_mgr> init_mgr_;
+    std::unique_ptr<tr::TimerMaker> timer_maker_;
 
 protected:
     void SetUp() override
     {
         SandboxedTest::SetUp();
-        init_mgr_ = tr_lib_init();
         ev_base_.reset(event_base_new(), event_base_free);
-        timer_maker_ = std::make_unique<libtransmission::EvTimerMaker>(ev_base_.get());
+        timer_maker_ = std::make_unique<tr::EvTimerMaker>(ev_base_.get());
         Watchdir::set_generic_rescan_interval(GenericRescanInterval);
     }
 
@@ -99,7 +91,7 @@ protected:
         return watchdir;
     }
 
-    void createFile(std::string_view dirname, std::string_view basename, std::string_view contents = ""sv)
+    static void createFile(std::string_view dirname, std::string_view basename, std::string_view contents = ""sv)
     {
         createFileWithContents(tr_pathbuf{ dirname, '/', basename }, contents);
     }
@@ -268,4 +260,4 @@ INSTANTIATE_TEST_SUITE_P( //
         WatchMode::NATIVE,
         WatchMode::GENERIC));
 
-} // namespace libtransmission::test
+} // namespace tr::test

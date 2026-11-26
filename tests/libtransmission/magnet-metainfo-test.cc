@@ -7,15 +7,16 @@
 #include <cstddef> // size_t, std::byte
 #include <string_view>
 
-#include "gtest/gtest.h"
-
 #include <libtransmission/crypto-utils.h> // tr_rand_buffer()
 #include <libtransmission/magnet-metainfo.h>
 #include <libtransmission/tr-macros.h>
 
+#include "test-fixtures.h"
+
+using MagnetMetainfoTest = ::tr::test::TransmissionTest;
 using namespace std::literals;
 
-TEST(MagnetMetainfo, magnetParse)
+TEST_F(MagnetMetainfoTest, magnetParse)
 {
     auto constexpr ExpectedHash = tr_sha1_digest_t{ std::byte{ 210 }, std::byte{ 53 },  std::byte{ 64 },  std::byte{ 16 },
                                                     std::byte{ 163 }, std::byte{ 202 }, std::byte{ 74 },  std::byte{ 222 },
@@ -60,11 +61,21 @@ TEST(MagnetMetainfo, magnetParse)
         "&ws=http%3A%2F%2Fserver.webseed.org%2Fpath%2Fto%2Ffile"
         "&tr=http%3A%2F%2Ftracker.opentracker.org%2Fannounce"sv;
 
-    for (auto const& uri : { UriHex, UriHexWithEmptyValue, UriHexWithJunkValues, UriBase32 })
+    // UriHex again, spelled the way a URI library that insists on an authority
+    // writes it.
+    auto constexpr UriHexEmptyAuthority =
+        "magnet:///?xt=urn:btih:"
+        "d2354010a3ca4ade5b7427bb093a62a3899ff381"
+        "&dn=Display%20Name"
+        "&tr=http%3A%2F%2Ftracker.openbittorrent.com%2Fannounce"
+        "&tr=http%3A%2F%2Ftracker.opentracker.org%2Fannounce"
+        "&ws=http%3A%2F%2Fserver.webseed.org%2Fpath%2Fto%2Ffile"sv;
+
+    for (auto const& uri : { UriHex, UriHexWithEmptyValue, UriHexWithJunkValues, UriBase32, UriHexEmptyAuthority })
     {
         auto mm = tr_magnet_metainfo{};
 
-        EXPECT_TRUE(mm.parseMagnet(uri));
+        ASSERT_TRUE(mm.parseMagnet(uri)) << uri;
         EXPECT_EQ(2U, std::size(mm.announce_list()));
         auto it = std::begin(mm.announce_list());
         EXPECT_EQ(0U, it->tier);
@@ -91,7 +102,7 @@ TEST(MagnetMetainfo, magnetParse)
     }
 }
 
-TEST(WebUtilsTest, parseMagnetFuzzRegressions)
+TEST_F(MagnetMetainfoTest, parseMagnetFuzzRegressions)
 {
     static auto constexpr Tests = std::array<std::string_view, 1>{
         "UICOl7RLjChs/QZZwNH4sSQwuH890UMHuoxoWBmMkr0=",
@@ -104,7 +115,7 @@ TEST(WebUtilsTest, parseMagnetFuzzRegressions)
     }
 }
 
-TEST(WebUtilsTest, parseMagnetFuzz)
+TEST_F(MagnetMetainfoTest, parseMagnetFuzz)
 {
     auto buf = std::array<char, 1024>{};
 

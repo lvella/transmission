@@ -5,6 +5,8 @@
 #import <Foundation/Foundation.h>
 #import <Quartz/Quartz.h>
 
+#include <vector>
+
 #include <libtransmission/transmission.h>
 
 @class FileListNode;
@@ -35,14 +37,15 @@ extern NSString* const kTorrentDidChangeGroupNotification;
 - (void)getAmountFinished:(float*)tab size:(int)size;
 @property(nonatomic) NSIndexSet* previousFinishedPieces;
 
-- (void)update;
+// Gives each torrent the stat with its id; stats for other torrents are ignored.
+// Returns whether any torrent's `transmitting` changed.
++ (BOOL)updateTorrents:(NSArray<Torrent*>*)torrents fromStats:(std::vector<tr_stat>)stats;
 
 - (void)startTransferIgnoringQueue:(BOOL)ignoreQueue;
 - (void)startTransferNoQueue;
 - (void)startTransfer;
 - (void)startMagnetTransferAfterMetaDownload;
 - (void)stopTransfer;
-- (void)startQueue;
 - (void)sleep;
 - (void)wakeUp;
 - (void)idleLimitHit;
@@ -107,6 +110,7 @@ extern NSString* const kTorrentDidChangeGroupNotification;
 @property(nonatomic, readonly) NSInteger pieceSize;
 @property(nonatomic, readonly) NSInteger pieceCount;
 @property(nonatomic, readonly) NSString* hashString;
+@property(nonatomic, readonly) tr_torrent_id_t id;
 @property(nonatomic, readonly) BOOL privateTorrent;
 
 @property(nonatomic, readonly) NSString* torrentLocation;
@@ -194,10 +198,9 @@ extern NSString* const kTorrentDidChangeGroupNotification;
 
 //methods require fileStats to have been updated recently to be accurate
 - (CGFloat)fileProgress:(FileListNode*)node;
-- (BOOL)canChangeDownloadCheckForFile:(NSUInteger)index;
 - (BOOL)canChangeDownloadCheckForFiles:(NSIndexSet*)indexSet;
-- (NSInteger)checkForFiles:(NSIndexSet*)indexSet;
-- (void)setFileCheckState:(NSInteger)state forIndexes:(NSIndexSet*)indexSet;
+- (NSControlStateValue)checkForFiles:(NSIndexSet*)indexSet;
+- (void)setFileCheckState:(NSControlStateValue)state forIndexes:(NSIndexSet*)indexSet;
 - (void)setFilePriority:(tr_priority_t)priority forIndexes:(NSIndexSet*)indexSet;
 - (BOOL)hasFilePriority:(tr_priority_t)priority forIndexes:(NSIndexSet*)indexSet;
 - (NSSet*)filePrioritiesForIndexes:(NSIndexSet*)indexSet;

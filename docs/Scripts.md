@@ -30,7 +30,7 @@ Transmission can be set to invoke a script when downloads complete. The environm
  * `TR_TORRENT_PRIORITY` - The priority of the torrent (Low is "-1", Normal is "0", High is "1")
  * `TR_TORRENT_TRACKERS` - A comma-delimited list of the torrent's trackers' announce URLs
 
-[Here is an example script](https://trac.transmissionbt.com/browser/trunk/extras/send-email-when-torrent-done.sh) that sends an email when a torrent finishes.
+[Here is an example script](https://github.com/transmission/transmission/blob/main/extras/send-email-when-torrent-done.sh) that sends an email when a torrent finishes.
 
 ### Obsolete
 Functionality of these scripts has been implemented in libtransmission and is thus available in all clients.
@@ -46,4 +46,17 @@ Scripts which have not yet been ported and may not work with the latest version:
  * https://github.com/jaboto/Transmission-script - (cron)script set network limits according to the number of clients in the network
 
 ## Security with systemd
-`transmission-daemon`'s packaging has many permissions disabled as a standard safety measure. If your script needs more permissions than are provided by the default, users have [reported](https://github.com/transmission/transmission/issues/1951) that it can be resolved by changing to `NoNewPrivileges=false` in `/lib/systemd/system/transmission-daemon.service`.
+`transmission-daemon`'s packaging has many permissions disabled as a standard safety measure. If your script needs more permissions than are provided by the default, users have [reported](https://github.com/transmission/transmission/issues/1951) that it can be resolved by changing to `NoNewPrivileges=false` using a systemd unit override.
+
+```
+$ sudo systemctl edit transmission-daemon.service
+```
+
+and add the following content to the override:
+
+```
+[Service]
+NoNewPrivileges=false
+```
+
+and that override will be kept untouched by package upgrades.

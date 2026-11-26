@@ -9,17 +9,18 @@
 #error only libtransmission should #include this header.
 #endif
 
+#include <array>
 #include <cstddef> // size_t
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "libtransmission/transmission.h"
-
+#include "libtransmission/constants.h" // TrDefaultHttpServerBasePath
 #include "libtransmission/net.h"
 #include "libtransmission/quark.h"
-#include "libtransmission/settings.h"
+#include "libtransmission/session-settings.h"
+#include "libtransmission/types.h"
 #include "libtransmission/utils-ev.h"
 
 class tr_rpc_address;
@@ -27,7 +28,7 @@ struct tr_session;
 struct tr_variant;
 struct libdeflate_compressor;
 
-namespace libtransmission
+namespace tr
 {
 class Timer;
 }
@@ -35,54 +36,7 @@ class Timer;
 class tr_rpc_server
 {
 public:
-    class Settings final : public libtransmission::Settings
-    {
-    public:
-        Settings() = default;
-
-        explicit Settings(tr_variant const& src)
-        {
-            load(src);
-        }
-
-        // NB: When adding a field here, you must also add it to
-        // fields() if you want it to be in session-settings.json
-        bool authentication_required = false;
-        bool is_anti_brute_force_enabled = false;
-        bool is_enabled = false;
-        bool is_host_whitelist_enabled = true;
-        bool is_whitelist_enabled = true;
-        size_t anti_brute_force_limit = 100U;
-        std::string bind_address_str = "0.0.0.0";
-        std::string host_whitelist_str = "";
-        std::string salted_password = "";
-        std::string url = TR_DEFAULT_RPC_URL_STR;
-        std::string username = "";
-        std::string whitelist_str = TR_DEFAULT_RPC_WHITELIST;
-        tr_mode_t socket_mode = 0750;
-        tr_port port = tr_port::from_host(TR_DEFAULT_RPC_PORT);
-
-    private:
-        [[nodiscard]] Fields fields() override
-        {
-            return {
-                { TR_KEY_anti_brute_force_enabled, &is_anti_brute_force_enabled },
-                { TR_KEY_anti_brute_force_threshold, &anti_brute_force_limit },
-                { TR_KEY_rpc_authentication_required, &authentication_required },
-                { TR_KEY_rpc_bind_address, &bind_address_str },
-                { TR_KEY_rpc_enabled, &is_enabled },
-                { TR_KEY_rpc_host_whitelist, &host_whitelist_str },
-                { TR_KEY_rpc_host_whitelist_enabled, &is_host_whitelist_enabled },
-                { TR_KEY_rpc_port, &port },
-                { TR_KEY_rpc_password, &salted_password },
-                { TR_KEY_rpc_socket_mode, &socket_mode },
-                { TR_KEY_rpc_url, &url },
-                { TR_KEY_rpc_username, &username },
-                { TR_KEY_rpc_whitelist, &whitelist_str },
-                { TR_KEY_rpc_whitelist_enabled, &is_whitelist_enabled },
-            };
-        }
-    };
+    using Settings = tr::RpcServerSettings;
 
     tr_rpc_server(tr_session* session, Settings&& settings);
     ~tr_rpc_server();
@@ -163,7 +117,7 @@ public:
         return settings_.anti_brute_force_limit;
     }
 
-    constexpr void set_anti_brute_force_limit(int limit) noexcept
+    constexpr void set_anti_brute_force_limit(size_t limit) noexcept
     {
         settings_.anti_brute_force_limit = limit;
     }
@@ -192,8 +146,8 @@ public:
 
     std::unique_ptr<tr_rpc_address> bind_address_;
 
-    std::unique_ptr<libtransmission::Timer> start_retry_timer;
-    libtransmission::evhelpers::evhttp_unique_ptr httpd;
+    std::unique_ptr<tr::Timer> start_retry_timer;
+    tr::evhelpers::evhttp_unique_ptr httpd;
     tr_session* const session;
 
     size_t login_attempts_ = 0U;

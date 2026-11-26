@@ -17,10 +17,10 @@
 
 #include <event2/event.h>
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include <libtransmission/error.h>
-#include <libtransmission/utils.h>
+#include <libtransmission/string-utils.h>
 
 #include "daemon.h"
 

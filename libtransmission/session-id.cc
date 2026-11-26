@@ -11,7 +11,7 @@
 #include <sys/stat.h>
 #endif
 
-#include <fmt/core.h>
+#include <fmt/format.h>
 
 #include "libtransmission/crypto-utils.h" // for tr_rand_obj()
 #include "libtransmission/error-types.h"
@@ -64,11 +64,12 @@ tr_sys_file_t create_lockfile(std::string_view session_id)
 
     if (error)
     {
-        tr_logAddWarn(fmt::format(
-            _("Couldn't create '{path}': {error} ({error_code})"),
-            fmt::arg("path", lockfile_path),
-            fmt::arg("error", error.message()),
-            fmt::arg("error_code", error.code())));
+        tr_logAddWarn(
+            fmt::format(
+                fmt::runtime(_("Couldn't create '{path}': {error} ({error_code})")),
+                fmt::arg("path", lockfile_path),
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
     }
 
     return lockfile_fd;
@@ -109,13 +110,14 @@ tr_session_id::session_id_t tr_session_id::make_session_id()
     return session_id;
 }
 
+// NOLINTNEXTLINE(bugprone-exception-escape)
 tr_session_id::~tr_session_id()
 {
     destroy_lockfile(current_lock_file_, std::data(current_value_));
     destroy_lockfile(previous_lock_file_, std::data(previous_value_));
 }
 
-bool tr_session_id::is_local(std::string_view session_id) noexcept
+bool tr_session_id::is_local(std::string_view session_id)
 {
     if (std::empty(session_id))
     {
@@ -128,7 +130,7 @@ bool tr_session_id::is_local(std::string_view session_id) noexcept
     auto error = tr_error{};
     if (auto lockfile_fd = tr_sys_file_open(lockfile_path, TR_SYS_FILE_READ, 0, &error); lockfile_fd == TR_BAD_SYS_FILE)
     {
-        if (TR_ERROR_IS_ENOENT(error.code()))
+        if (tr_error_is_enoent(error.code()))
         {
             error = {};
         }
@@ -146,17 +148,18 @@ bool tr_session_id::is_local(std::string_view session_id) noexcept
 
     if (error)
     {
-        tr_logAddWarn(fmt::format(
-            _("Couldn't open session lock file '{path}': {error} ({error_code})"),
-            fmt::arg("path", lockfile_path),
-            fmt::arg("error", error.message()),
-            fmt::arg("error_code", error.code())));
+        tr_logAddWarn(
+            fmt::format(
+                fmt::runtime(_("Couldn't open session lock file '{path}': {error} ({error_code})")),
+                fmt::arg("path", lockfile_path),
+                fmt::arg("error", error.message()),
+                fmt::arg("error_code", error.code())));
     }
 
     return is_local;
 }
 
-std::string_view tr_session_id::sv() const noexcept
+std::string_view tr_session_id::sv() const
 {
     if (auto const now = get_current_time_(); now >= expires_at_)
     {
@@ -172,7 +175,7 @@ std::string_view tr_session_id::sv() const noexcept
     return std::string_view{ std::data(current_value_), std::size(current_value_) - 1 };
 }
 
-char const* tr_session_id::c_str() const noexcept
+char const* tr_session_id::c_str() const
 {
     return std::data(sv()); // current_value_ is zero-terminated
 }

@@ -19,10 +19,8 @@
 #include <thread>
 #include <utility> // std::move
 
-#include "libtransmission/transmission.h"
-
 #include "libtransmission/torrent-metainfo.h"
-#include "libtransmission/tr-macros.h"
+#include "libtransmission/types.h"
 
 class tr_verify_worker
 {
@@ -41,7 +39,13 @@ public:
         virtual void on_verify_done(bool aborted) = 0;
     };
 
+    tr_verify_worker() = default;
     ~tr_verify_worker();
+
+    tr_verify_worker(tr_verify_worker const&) = delete;
+    tr_verify_worker(tr_verify_worker&&) = delete;
+    tr_verify_worker& operator=(tr_verify_worker const&) = delete;
+    tr_verify_worker& operator=(tr_verify_worker&&) = delete;
 
     void add(std::unique_ptr<Mediator> mediator, tr_priority_t priority);
 
@@ -96,5 +100,5 @@ private:
     std::atomic<bool> stop_current_ = false;
     std::condition_variable stop_current_cv_;
 
-    std::chrono::milliseconds sleep_per_seconds_during_verify_;
+    std::chrono::milliseconds sleep_per_seconds_during_verify_ = {};
 };
