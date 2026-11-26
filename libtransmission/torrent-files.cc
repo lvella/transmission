@@ -236,7 +236,7 @@ void tr_torrent_files::remove(std::string_view parent_in, std::string_view tmpdi
             // I thought torrents have at most one top-level dir, but I am
             // following suit of "trash()" function.
             auto subpath = found->subpath();
-            if (auto dir_limit = subpath.find('/'); dir_limit != ""sv.npos)
+            if (auto dir_limit = subpath.find('/'); dir_limit != std::string_view::npos)
             {
                 dirs_found.insert(tr_pathbuf{ parent, '/', subpath.substr(0, dir_limit) }.c_str());
             }
