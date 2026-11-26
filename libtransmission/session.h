@@ -1348,8 +1348,10 @@ private:
     // depends-on: session_thread_, timer_maker_, ip_cache_
     // Each OS address-change event restarts the timer; when it fires, the IPv6
     // source address is refreshed. The delay batches the several kernel
-    // events produced by a single address change.
-    static auto constexpr Ipv6ChangeSettleTime = std::chrono::seconds{ 1 };
+    // events produced by a single address change, and outlasts duplicate
+    // address detection: FreeBSD reports a new address when it is added,
+    // about 2 seconds before it becomes usable, and reports nothing then.
+    static auto constexpr Ipv6ChangeSettleTime = std::chrono::seconds{ 5 };
     std::unique_ptr<tr::Timer> ipv6_change_timer_;
     std::optional<IPv6AddressWatcher> ipv6_address_watcher_;
 
