@@ -12,7 +12,6 @@
 #define TR_NAME "Transmission"
 
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstddef> // size_t
 #include <cstdint> // uintX_t
@@ -25,7 +24,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <utility> // for std::pair
 #include <vector>
 
